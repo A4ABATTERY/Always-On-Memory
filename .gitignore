@@ -1,0 +1,18 @@
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Inbox and temporary files
+inbox/
+agent.log
+tests/*
+
+# Environment and secrets
+.env
+
+# Python artifacts
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
