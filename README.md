@@ -232,6 +232,10 @@ always-on-memory/
 - [sqlite-vec](https://github.com/asg017/sqlite-vec) — Vector search extension for SQLite
 - [aiohttp](https://docs.aiohttp.org/) — Async HTTP server
 
+## Credits
+
+This project was derived from the [Google Cloud Platform Always-On-Memory Agent](https://github.com/GoogleCloudPlatform/generative-ai/tree/main/gemini/agents/always-on-memory-agent) and has been expanded with PydanticAI, Librarian mode (vector search), and rate-limiting resilience.
+
 ## License
 
 MIT
