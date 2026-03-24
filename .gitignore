@@ -8,6 +8,7 @@
 inbox/
 agent.log
 tests/*
+local/
 
 # Environment and secrets
 .env
