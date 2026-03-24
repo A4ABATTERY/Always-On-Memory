@@ -58,7 +58,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ### 1. Install
 
 ```bash
-cd local_tools/always-on-memory
+git clone https://github.com/A4ABATTERY/Always-On-Memory.git
+cd Always-On-Memory
 pip install -r requirements.txt
 ```
 
@@ -215,7 +216,7 @@ All LLM calls use `retry_with_backoff()`:
 ## Project Structure
 
 ```
-always-on-memory/
+Always-On-Memory/
 ├── agent.py          # Main agent (PydanticAI + aiohttp)
 ├── requirements.txt  # Dependencies
 ├── .env              # Configuration (auto-loaded)
