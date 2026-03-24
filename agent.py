@@ -1324,6 +1324,14 @@ def build_http(agent: MemoryAgent, watch_path: str = "./inbox"):
         result = clear_all_memories(inbox_path=watch_path)
         return web.json_response(result)
 
+    async def handle_search(request: web.Request):
+        q = request.query.get("q", "").strip()
+        k = int(request.query.get("k", "5"))
+        if not q:
+            return web.json_response({"error": "missing ?q= parameter"}, status=400)
+        results = await search_documents(q, k=k)
+        return web.json_response(results)
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -1333,6 +1341,7 @@ def build_http(agent: MemoryAgent, watch_path: str = "./inbox"):
     app.router.add_get("/memories", handle_memories)
     app.router.add_post("/delete", handle_delete)
     app.router.add_post("/clear", handle_clear)
+    app.router.add_get("/search", handle_search)
 
     return app
 
