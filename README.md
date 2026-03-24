@@ -30,30 +30,30 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Memory Agent v2                           │
-│                                                                  │
-│  ┌─────────────┐  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  │
-│  │ IngestAgent  │  │ ConsolidateAgent │  │    QueryAgent      │  │SelfImprovement   │  │
-│  │ (Flash-Lite) │  │   (Flash-Lite)   │  │   (Flash-Lite)     │  │   (Flash)        │  │
-│  │              │  │                  │  │                    │  │                  │  │
-│  │ • store      │  │ • read uncons.   │  │ • read memories    │  │ • audit memory   │  │
-│  │   memory     │  │ • consolidate    │  │ • read history     │  │ • discover skills│  │
-│  │              │  │ • reinforce      │  │ • search documents │  │ • write SKILL.md │  │
-│  │              │  │ • close truths   │  │ • synthesize answer│  │                  │  │
-│  └──────┬───────┘  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  │
-│         │                   │                      │              │
-│  ┌──────┴───────────────────┴──────────────────────┴───────────┐  │
-│  │                    SQLite + sqlite-vec                       │  │
-│  │  memories │ consolidations │ documents │ vec_documents       │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  Background Loops:                                               │
-│  • Inbox Watcher (5s)        • Decay Loop (activity-aware)       │
-│  • Consolidation (30m)       • Document Indexer (60m)            │
-│  • Deep Re-Consolidation (24h)                                   │
-│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)     │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Memory Agent v2                                                  │
+│                                                                                         │
+│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐   │
+│  │ IngestAgent  │  │ ConsolidateAgent │  │    QueryAgent      │  │SelfImprovement   │   │
+│  │ (Flash-Lite) │  │   (Flash-Lite)   │  │   (Flash-Lite)     │  │   (Flash)        │   │
+│  │              │  │                  │  │                    │  │                  │   │
+│  │ • store      │  │ • read uncons.   │  │ • read memories    │  │ • audit memory   │   │
+│  │   memory     │  │ • consolidate    │  │ • read history     │  │ • discover skills│   │
+│  │              │  │ • reinforce      │  │ • search documents │  │ • write SKILL.md │   │
+│  │              │  │ • close truths   │  │ • synthesize answer│  │                  │   │
+│  └──────┬───────┘  └────────┬─────────┘  └─────────┬──────────┘  └────────┬─────────┘   │
+│         │                   │                      │                      |             │
+│  ┌──────┴───────────────────┴──────────────────────┴──────────────────────┴─────┐       │
+│  │                               SQLite + sqlite-vec                            │       │
+│  │             memories │ consolidations │ documents │ vec_documents            │       │
+│  └──────────────────────────────────────────────────────────────────────────────┘       │
+│                                                                                         │
+│  Background Loops:                                                                      │
+│  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                              │
+│  • Consolidation (30m)       • Document Indexer (60m)                                   │
+│  • Deep Re-Consolidation (24h)                                                          │
+│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                            │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
