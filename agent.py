@@ -90,6 +90,7 @@ RATE_LIMIT = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2-preview")
+SKILLS_DIR = os.getenv("SKILLS_DIR", ".agents/skills")
 
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}
@@ -415,6 +416,44 @@ def read_unconsolidated_memories() -> dict:
     return {"memories": memories, "count": len(memories)}
 
 
+def read_memory_partition(sector: str) -> dict:
+    """Fetches memories only from a specific sector (semantic, episodic, procedural, reflection).
+
+    Args:
+        sector: The sector name to filter by.
+    """
+    with db_session() as db:
+        rows = db.execute(
+            "SELECT * FROM memories WHERE sector = ? ORDER BY created_at DESC LIMIT 100",
+            (sector,)
+        ).fetchall()
+    memories = []
+    for r in rows:
+        memories.append({
+            "id": r["id"], "summary": r["summary"], "raw_text": r["raw_text"],
+            "importance": r["importance"], "created_at": r["created_at"],
+        })
+    return {"sector": sector, "memories": memories, "count": len(memories)}
+
+
+def write_skill_file(skill_name: str, content: str) -> dict:
+    """Writes a new skill or rule to the configured SKILLS_DIR.
+
+    Args:
+        skill_name: Short name for the skill (used for filename).
+        content: The full markdown content of the SKILL.md file.
+    """
+    clean_name = "".join(c for c in skill_name if c.isalnum() or c in ("-", "_")).lower()
+    target_dir = Path(SKILLS_DIR) / clean_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    skill_path = target_dir / "SKILL.md"
+    skill_path.write_text(content, encoding="utf-8")
+    
+    log.info(f"💾 Saved skill: {clean_name} to {skill_path}")
+    return {"status": "saved", "path": str(skill_path), "skill_name": clean_name}
+
+
 def store_consolidation(
     source_ids: list[int],
     summary: str,
@@ -626,7 +665,7 @@ def read_document(path: str) -> dict:
     file_path = Path(path).resolve()
     
     # Security: check if path is within allowed directories
-    allowed_dirs = [Path("inbox").resolve()]
+    allowed_dirs = [Path("inbox").resolve(), Path(SKILLS_DIR).resolve()]
     if WATCH_DIRS:
         allowed_dirs.extend([Path(d.strip()).resolve() for d in WATCH_DIRS.split(",") if d.strip()])
     
@@ -713,9 +752,25 @@ DEEP_CONSOLIDATE_SYSTEM_PROMPT = (
     "Be precise and analytical. Link facts to files."
 )
 
+SELF_IMPROVEMENT_SYSTEM_PROMPT = (
+    "You are a Self-Improvement Agent. Your goal is to evolve the project's capabilities "
+    "by discovering and refining skills based on past performance and failures.\n\n"
+    "1. Call read_memory_partition for 'reflection' and 'episodic' sectors.\n"
+    "2. Identify recurring failure patterns (EvoSkill thresholds: ≥3 errors, ≥2 hallucinations).\n"
+    "3. Identify successful complex workflows that should be codified.\n"
+    "4. Use Anthropic's Skill-Creator patterns to write new SKILL.md files:\n"
+    "   - Name: Short, descriptive ID.\n"
+    "   - Description: When to trigger (MAKE IT PUSHY to avoid undertriggering).\n"
+    "   - Instructions: Imperative, clear steps, examples of input/output.\n"
+    "5. Use EvoSkill taxonomy: Procedural guide, Scoped constraint, Correction reference, Meta-strategy, Style guide.\n"
+    "6. Call write_skill_file to persist the new or updated skill.\n"
+    "7. Call search_documents to see if a similar skill already exists before creating a new one.\n\n"
+    "Be proactive. If you see a way to make the Orchestrator more reliable, codify it as a skill."
+)
+
 
 def build_agents():
-    """Build PydanticAI agents for ingest, consolidate, and query."""
+    """Build PydanticAI agents for ingest, consolidate, query, and self-improvement."""
     ingest_agent = Agent(
         lite_model,
         system_prompt=INGEST_SYSTEM_PROMPT,
@@ -744,7 +799,16 @@ def build_agents():
         ],
     )
 
-    return ingest_agent, consolidate_agent, query_agent, deep_consolidate_agent
+    self_improvement_agent = Agent(
+        smart_model,
+        system_prompt=SELF_IMPROVEMENT_SYSTEM_PROMPT,
+        tools=[
+            read_memory_partition, search_documents, 
+            read_document, write_skill_file
+        ],
+    )
+
+    return ingest_agent, consolidate_agent, query_agent, deep_consolidate_agent, self_improvement_agent
 
 
 # ─── Retry with Backoff ────────────────────────────────────────
@@ -798,6 +862,7 @@ class MemoryAgent:
             self.consolidate_agent,
             self.query_agent,
             self.deep_consolidate_agent,
+            self.self_improvement_agent,
         ) = build_agents()
         if HAS_GENAI:
             self.client = genai.Client()
@@ -851,6 +916,17 @@ class MemoryAgent:
         )
         usage = result.usage()
         log.info(f"🧠 Deep re-consolidation complete: {usage.total_tokens} tokens used")
+        return result.output
+
+    async def self_improve(self) -> str:
+        log.info(f"🧬 Running self-improvement audit using {SMART_MODEL}...")
+        result = await retry_with_backoff(
+            self.self_improvement_agent.run,
+            "Audit recent reflection and episodic memories to discover or refine skills. "
+            f"Target directory: {SKILLS_DIR}",
+        )
+        usage = result.usage()
+        log.info(f"🧬 Self-improvement audit complete: {usage.total_tokens} tokens used")
         return result.output
 
     async def status(self) -> dict:
@@ -1132,8 +1208,11 @@ async def deep_reconsolidate_loop(agent: MemoryAgent, interval_hours: int = 24):
             
             if total >= 5:
                 log.info(f"🧠 Running deep re-consolidation ({total} total memories)...")
-                result = await agent.deep_reconsolidate()
-                log.info(f"🧠 Deep reconsolidation done: {result[:150]}")
+                await agent.deep_reconsolidate()
+                
+                # After factual consolidation, run self-improvement
+                log.info("🧬 Triggering self-improvement audit...")
+                await agent.self_improve()
             else:
                 log.info(f"🧠 Skipping deep re-consolidation ({total} memories, need >= 5)")
         except Exception as e:
@@ -1218,6 +1297,10 @@ def build_http(agent: MemoryAgent, watch_path: str = "./inbox"):
         result = await agent.deep_reconsolidate()
         return web.json_response({"status": "done", "response": result})
 
+    async def handle_improve(request: web.Request):
+        result = await agent.self_improve()
+        return web.json_response({"status": "done", "response": result})
+
     async def handle_status(request: web.Request):
         stats = get_memory_stats()
         return web.json_response(stats)
@@ -1245,6 +1328,7 @@ def build_http(agent: MemoryAgent, watch_path: str = "./inbox"):
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
     app.router.add_post("/reconsolidate", handle_reconsolidate)
+    app.router.add_post("/improve", handle_improve)
     app.router.add_get("/status", handle_status)
     app.router.add_get("/memories", handle_memories)
     app.router.add_post("/delete", handle_delete)
