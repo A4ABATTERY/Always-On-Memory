@@ -21,7 +21,9 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Temporal Truth Windows** | Tracks `valid_from` / `valid_to` to handle evolving facts |
 | **Memory Reinforcement** | Consolidation agent boosts importance of confirmed knowledge |
 | **Librarian Mode** | Indexes source code via `sqlite-vec` embeddings for semantic file search |
+| **Search API** | Dedicated endpoint for semantic code search across your project |
 | **Deep Re-Consolidation** | 24h cycle using a smarter model (Gemini 3.0 Flash) for deep insight |
+| **Self-Improvement** | Autonomously evolves project skills by analyzing failure patterns (EvoSkill) |
 | **Rate-Limit Resilience** | Exponential backoff with retry on 429 / quota errors |
 | **Clean Shutdown** | Signal-based (`Ctrl+C` / `SIGTERM`) graceful shutdown |
 
@@ -31,15 +33,15 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Memory Agent v2                           │
 │                                                                  │
-│  ┌─────────────┐  ┌──────────────────┐  ┌────────────────────┐  │
-│  │ IngestAgent  │  │ ConsolidateAgent │  │    QueryAgent      │  │
-│  │ (Flash-Lite) │  │   (Flash-Lite)   │  │   (Flash-Lite)     │  │
-│  │              │  │                  │  │                    │  │
-│  │ • store      │  │ • read uncons.   │  │ • read memories    │  │
-│  │   memory     │  │ • consolidate    │  │ • read history     │  │
-│  │              │  │ • reinforce      │  │ • search documents │  │
-│  │              │  │ • close truths   │  │ • synthesize       │  │
-│  └──────┬───────┘  └────────┬─────────┘  └────────┬───────────┘  │
+│  ┌─────────────┐  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  │
+│  │ IngestAgent  │  │ ConsolidateAgent │  │    QueryAgent      │  │SelfImprovement   │  │
+│  │ (Flash-Lite) │  │   (Flash-Lite)   │  │   (Flash-Lite)     │  │   (Flash)        │  │
+│  │              │  │                  │  │                    │  │                  │  │
+│  │ • store      │  │ • read uncons.   │  │ • read memories    │  │ • audit memory   │  │
+│  │   memory     │  │ • consolidate    │  │ • read history     │  │ • discover skills│  │
+│  │              │  │ • reinforce      │  │ • search documents │  │ • write SKILL.md │  │
+│  │              │  │ • close truths   │  │ • synthesize answer│  │                  │  │
+│  └──────┬───────┘  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  │
 │         │                   │                      │              │
 │  ┌──────┴───────────────────┴──────────────────────┴───────────┐  │
 │  │                    SQLite + sqlite-vec                       │  │
@@ -49,7 +51,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │  Background Loops:                                               │
 │  • Inbox Watcher (5s)        • Decay Loop (activity-aware)       │
 │  • Consolidation (30m)       • Document Indexer (60m)            │
-│  • Deep Re-Consolidation (24h, Gemini 3.0 Flash)                 │
+│  • Deep Re-Consolidation (24h)                                   │
+│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,6 +137,9 @@ curl -X POST http://localhost:8888/consolidate
 
 # Force deep re-consolidation (uses smarter model)
 curl -X POST http://localhost:8888/reconsolidate
+
+# Force self-improvement audit
+curl -X POST http://localhost:8888/improve
 ```
 
 ## API Reference
@@ -143,9 +149,11 @@ curl -X POST http://localhost:8888/reconsolidate
 | `/status` | GET | Memory & index statistics |
 | `/memories` | GET | List all stored memories (ranked by composite score) |
 | `/ingest` | POST | Ingest text `{"text": "...", "source": "..."}` |
-| `/query?q=...` | GET | Query memories + search indexed documents |
+| `/query?q=...` | GET | Query memories + search indexed documents (synthesized answer) |
+| `/search?q=...` | GET | Direct semantic search over documents (file paths + snippets) |
 | `/consolidate` | POST | Trigger manual consolidation |
 | `/reconsolidate` | POST | Trigger deep re-consolidation (smart model) |
+| `/improve` | POST | Trigger manual self-improvement audit |
 | `/delete` | POST | Delete a memory `{"memory_id": 1}` |
 | `/clear` | POST | Delete all memories (full reset) |
 
@@ -212,6 +220,7 @@ All LLM calls use `retry_with_backoff()`:
 | `RATE_LIMIT` | `15` | Max concurrent model requests |
 | `WATCH_DIRS` | (empty) | Comma-separated dirs for Librarian mode |
 | `IGNORE_DIRS` | (empty) | Extra directory names to skip |
+| `SKILLS_DIR` | `.agents/skills` | Directory where self-improvement agent saves skills |
 
 ## Project Structure
 

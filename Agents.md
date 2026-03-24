@@ -34,12 +34,29 @@ To ensure context survives across sessions, your agent must ingest meaningful ou
 ```bash
 curl -X POST http://localhost:8888/ingest \
   -H "Content-Type: application/json" \
-  -d '{"text": "FACT_OR_SUMMARY", "source": "context-identifier", "importance": 0.8}'
+  - d '{"text": "FACT_OR_SUMMARY", "source": "context-identifier", "importance": 0.8}'
 ```
 
 ---
 
-## 3. Memory Taxonomy & Sectors
+## 3. Searching Documents (Librarian)
+
+If your agent needs to find specific code patterns, function definitions, or documentation within the project files, it can use the vector search endpoint directly.
+
+### When to Search
+- **Looking for Symbols**: Find where a specific function or class is defined.
+- **Understanding Patterns**: Search for "how we handle error X" to find code examples.
+- **Researching Configuration**: Find where specific constants or env vars are used.
+
+### How to Search
+```bash
+curl -s "http://localhost:8888/search?q=YOUR_CODE_QUERY&k=5"
+```
+Returns a list of matching file paths and code snippets.
+
+---
+
+## 4. Memory Taxonomy & Sectors
 
 Categorize your memories to improve retrieval precision:
 
@@ -52,7 +69,7 @@ Categorize your memories to improve retrieval precision:
 
 ---
 
-## 4. Integration Best Practices
+## 5. Integration Best Practices
 
 - **Entity-Specific Queries**: Use specific keywords (filenames, function names, error codes) rather than vague descriptions.
 - **Synthesized Ingestion**: Do not ingest raw chat history. Ingest concise, structured summaries focused on "What changed and Why."
@@ -61,7 +78,7 @@ Categorize your memories to improve retrieval precision:
 
 ---
 
-## 5. Quick Troubleshooting
+## 6. Quick Troubleshooting
 
 If your agent is losing context:
 1. Verify the memory agent is running (`/status`).
