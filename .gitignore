@@ -10,6 +10,7 @@ agent.log
 tests/*
 local/
 .agents/
+.agent/
 
 # Environment and secrets
 .env
