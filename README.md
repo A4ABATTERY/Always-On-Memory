@@ -50,7 +50,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │                                                                                         │
 │  Background Loops:                                                                      │
 │  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                              │
-│  • Consolidation (30m)       • Document Indexer (60m)                                   │
+│  • Consolidation (30m)       • Document Indexer (Debounced 60s)                         │
 │  • Deep Re-Consolidation (24h)                                                          │
 │  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                            │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -180,7 +180,11 @@ Memories are categorized into psychological sectors for richer retrieval:
 
 ## Librarian Mode (Vector Search)
 
-When `WATCH_DIRS` is set, the agent periodically crawls those directories and indexes source code using `sqlite-vec` embeddings (`gemini-embedding-2-preview`).
+When `WATCH_DIRS` is set, the agent periodically scans those directories for changes using `os.path.getmtime`. To avoid indexing while files are still being actively modified (e.g., by an LLM), it implements a **60-second debounce timer**.
+
+- **Detection**: Checks for modifications every 5 seconds (`SCAN_INTERVAL`).
+- **Debounce**: Waits for a 60-second quiet window (`DEBOUNCE_INTERVAL`) after the last detected change before indexing.
+- **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`).
 
 **What gets indexed:** `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.md`, `.json`, `.yaml`, `.toml`, and 20+ other code/config extensions.
 
@@ -221,6 +225,8 @@ All LLM calls use `retry_with_backoff()`:
 | `WATCH_DIRS` | (empty) | Comma-separated dirs for Librarian mode |
 | `IGNORE_DIRS` | (empty) | Extra directory names to skip |
 | `SKILLS_DIR` | `.agents/skills` | Directory where self-improvement agent saves skills |
+| `DEBOUNCE_INTERVAL` | `60` | Delay (seconds) after last change before starting indexing |
+| `SCAN_INTERVAL` | `5` | Frequency (seconds) for checking file modifications |
 
 ## Project Structure
 

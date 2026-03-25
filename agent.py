@@ -91,6 +91,8 @@ WATCH_DIRS = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2-preview")
 SKILLS_DIR = os.getenv("SKILLS_DIR", ".agents/skills")
+DEBOUNCE_INTERVAL = int(os.getenv("DEBOUNCE_INTERVAL", "60"))  # seconds to wait after last change before indexing
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "5"))          # seconds between checking for modifications
 
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}
@@ -136,6 +138,34 @@ SKIP_DIRS = {
     ".next", ".nuxt", "coverage", ".coverage",
     "vendor", "target",  # Go/Rust build dirs
 }
+
+
+def _get_latest_mtime(dirs: list[str]) -> float:
+    """Find the maximum modification time across all relevant files in the watched directories."""
+    extra_ignores = {d.strip() for d in IGNORE_DIRS.split(",") if d.strip()}
+    all_skip = SKIP_DIRS | extra_ignores
+
+    latest_mtime = 0.0
+    for dir_path in dirs:
+        folder = Path(dir_path)
+        if not folder.is_dir():
+            continue
+        
+        for f in folder.rglob("*"):
+            if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
+                continue
+            
+            parts = f.parts
+            if any(p.startswith(".") or p in all_skip for p in parts):
+                continue
+            
+            try:
+                mtime = f.stat().st_mtime
+                if mtime > latest_mtime:
+                    latest_mtime = mtime
+            except (OSError, ValueError):
+                continue
+    return latest_mtime
 
 
 def is_binary_file(file_path: Path) -> bool:
@@ -1033,18 +1063,53 @@ async def index_documents_loop(interval_minutes: int = 60):
         return
 
     dirs = [d.strip() for d in WATCH_DIRS.split(",") if d.strip()]
-    log.info(f"📚 Librarian: indexing {len(dirs)} folder(s) every {interval_minutes}m")
+    log.info(f"📚 Librarian: monitoring {len(dirs)} folder(s) for changes (debounce: {DEBOUNCE_INTERVAL}s)")
 
+    # 0. Get initial last indexed time from DB
+    with db_session() as db:
+        row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
+        last_indexed_iso = row["last_idx"] if row and row["last_idx"] else "1970-01-01T00:00:00"
+        last_indexed_time = datetime.fromisoformat(last_indexed_iso).replace(tzinfo=timezone.utc).timestamp()
+
+    last_change_time = None
+    current_max_mtime = last_indexed_time
+    
     while not _shutdown_event.is_set():
         try:
-            await _index_all_dirs(dirs)
+            # 1. Get latest modification time across all files
+            latest_mtime = _get_latest_mtime(dirs)
+            
+            # 2. If we find a file newer than our current max, it's a new change
+            if latest_mtime > current_max_mtime:
+                if last_change_time is None:
+                    log.info(f"📚 Librarian: modification detected. Starting {DEBOUNCE_INTERVAL}s debounce...")
+                else:
+                    log.info(f"📚 Librarian: further modification detected. Resetting {DEBOUNCE_INTERVAL}s timer.")
+                last_change_time = time.time()
+                current_max_mtime = latest_mtime
+            
+            # 3. If debounce period has passed, run full indexing
+            if last_change_time and (time.time() - last_change_time >= DEBOUNCE_INTERVAL):
+                log.info("📚 Librarian: debounce window closed. Synchronizing vector index...")
+                await _index_all_dirs(dirs)
+                
+                # Refresh last_indexed_time from DB
+                with db_session() as db:
+                    row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
+                    if row and row["last_idx"]:
+                        last_indexed_iso = row["last_idx"]
+                        last_indexed_time = datetime.fromisoformat(last_indexed_iso).replace(tzinfo=timezone.utc).timestamp()
+                
+                last_change_time = None
+                current_max_mtime = last_indexed_time
+                
         except asyncio.CancelledError:
             break
         except Exception as e:
             log.error(f"Indexing error: {e}")
-
+        # Poll internal wait
         try:
-            await asyncio.wait_for(_shutdown_event.wait(), timeout=interval_minutes * 60)
+            await asyncio.wait_for(_shutdown_event.wait(), timeout=SCAN_INTERVAL)
             break
         except asyncio.TimeoutError:
             pass
@@ -1117,7 +1182,7 @@ async def _index_all_dirs(dirs: list[str]):
                 embedding = await embed_text(chunk)
                 
                 # Store (short-lived connection)
-                with db_session() as db:
+                with db_session() as db: 
                     cursor = db.execute(
                         "INSERT INTO documents (path, content_hash, chunk_text, chunk_index, updated_at) VALUES (?, ?, ?, ?, ?)",
                         (str(f), content_hash, chunk, i, now),
