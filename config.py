@@ -36,8 +36,8 @@ _load_dotenv()
 
 # ─── Config ────────────────────────────────────────────────────
 
-MODEL: str = os.getenv("MODEL", "gemini-3.1-flash-lite")
-SMART_MODEL: str = os.getenv("SMART_MODEL", "gemini-3.0-flash")
+MODEL: str = os.getenv("MODEL", "gemini-3.1-flash-lite-preview")
+SMART_MODEL: str = os.getenv("SMART_MODEL", "gemini-3-flash-preview")
 DB_PATH: str = os.getenv("MEMORY_DB", "memory.db")
 RATE_LIMIT: int = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths

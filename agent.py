@@ -214,6 +214,13 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                             db.commit()
                 except Exception as file_err:
                     log.error(f"Error ingesting {f.name}: {file_err}")
+                    # Mark as processed even on failure to avoid infinite loop (or use a failure count)
+                    with db_session() as db:
+                        db.execute(
+                            "INSERT INTO processed_files (path, processed_at) VALUES (?, ?)",
+                            (str(f), datetime.now(timezone.utc).isoformat() + " (FAILED)"),
+                        )
+                        db.commit()
 
         except asyncio.CancelledError:
             break
@@ -242,6 +249,8 @@ async def consolidation_loop(agent: MemoryAgent, interval_minutes: int = 30):
             if count >= 2:
                 log.info(f"🔄 Running consolidation ({count} unconsolidated memories)...")
                 await agent.consolidate()
+            else:
+                log.debug(f"🔄 Consolidation skipped: {count} memories found (need >= 2)")
         except Exception as e:
             log.error(f"Consolidation error: {e}")
 
