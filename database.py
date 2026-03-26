@@ -14,13 +14,13 @@ try:
 except ImportError:
     HAS_SQLITE_VEC = False
 
-from config import DB_PATH
+from config import get_db_path
 
 log = logging.getLogger("memory-agent.database")
 
 def get_db() -> sqlite3.Connection:
     """Get a fresh database connection, re-evaluating the path from env."""
-    db = sqlite3.connect(DB_PATH) # Removed timeout parameter
+    db = sqlite3.connect(get_db_path())
     db.row_factory = sqlite3.Row
     try:
         db.execute("PRAGMA journal_mode=WAL")

@@ -36,9 +36,13 @@ _load_dotenv()
 
 # ─── Config ────────────────────────────────────────────────────
 
+def get_db_path() -> str:
+    """Returns the current database path, allowing for dynamic override in tests."""
+    return os.getenv("MEMORY_DB", "memory.db")
+
 MODEL: str = os.getenv("MODEL", "gemini-3.1-flash-lite-preview")
 SMART_MODEL: str = os.getenv("SMART_MODEL", "gemini-3-flash-preview")
-DB_PATH: str = os.getenv("MEMORY_DB", "memory.db")
+DB_PATH: str = get_db_path() # Keep for backward compatibility, but get_db_path() is preferred
 RATE_LIMIT: int = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS: str = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip
