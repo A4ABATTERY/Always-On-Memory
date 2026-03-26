@@ -8,7 +8,8 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
-from database import db_session
+import numpy as np
+from database import db_session, HAS_SQLITE_VEC
 from models import MemCube, Consolidation
 from utils import serialize_int8, embed_text
 
@@ -88,8 +89,8 @@ async def store_memory(
         if embedding:
             try:
                 db.execute(
-                    "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, vec_quantize_int8(vec_f32(?), 'unit'))",
-                    (mid, json.dumps(embedding)),
+                    "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, vec_int8(?))",
+                    (mid, serialize_int8(embedding)),
                 )
             except Exception as e:
                 log.error(f"Vec insert error for memory #{mid}: {e}")
@@ -159,6 +160,87 @@ def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
         })
     return {"memories": memories, "count": len(memories)}
 
+def read_unconsolidated_with_embeddings(limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetch unconsolidated memories along with their embeddings."""
+    if not HAS_SQLITE_VEC:
+        log.warning("sqlite-vec not available, cannot fetch embeddings.")
+        return []
+
+    with db_session() as db:
+        # Join memories with vec_memories to get the embeddings
+        # We use vec_to_f32 to convert the int8 quantized vector back to float list
+        rows = db.execute(
+            """
+            SELECT m.*, vec_to_f32(v.embedding) as vector 
+            FROM memories m
+            JOIN vec_memories v ON m.id = v.memory_id
+            WHERE m.consolidated = 0
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+    
+    results = []
+    for r in rows:
+        results.append({
+            "id": r["id"],
+            "cube_id": r["cube_id"],
+            "summary": r["summary"],
+            "topics": json.loads(r["topics"]),
+            "embedding": json.loads(r["vector"]) if isinstance(r["vector"], str) else r["vector"],
+            "created_at": r["created_at"]
+        })
+    return results
+
+def cluster_memories_by_embedding(memories: List[Dict[str, Any]], threshold: float = 0.75) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Greedy Similarity Clustering (Leader Algorithm).
+    Groups memories into clusters based on cosine similarity.
+    """
+    if not memories:
+        return {}
+
+    clusters: List[Dict[str, Any]] = [] # List of {centroid: np.array, members: list}
+
+    for m in memories:
+        emb = np.array(m["embedding"])
+        # Normalize for cosine similarity (dot product of unit vectors)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+        
+        best_sim = -1.0
+        best_cluster_idx = -1
+        
+        for i, cluster in enumerate(clusters):
+            # Cosine similarity = dot product since embeddings are normalized
+            sim = np.dot(emb, cluster["centroid"])
+            if sim > best_sim:
+                best_sim = sim
+                best_cluster_idx = i
+        
+        if best_sim >= threshold:
+            clusters[best_cluster_idx]["members"].append(m)
+            # Optional: update centroid (running average)
+            # clusters[best_cluster_idx]["centroid"] = (clusters[best_cluster_idx]["centroid"] + emb) / 2
+        else:
+            clusters.append({
+                "centroid": emb,
+                "members": [m]
+            })
+
+    # Convert back to a dictionary of clusters for compatibility
+    res = {}
+    for idx, cluster in enumerate(clusters):
+        # Name clusters by the first memory summary or index
+        first_mem = cluster["members"][0]
+        cluster_name = f"cluster_{idx}_{first_mem['summary'][:20].strip()}"
+        res[cluster_name] = cluster["members"]
+
+    log.info(f"🧩 Clustering identified {len(res)} semantic groups from {len(memories)} memories.")
+    return res
+
 def read_memory_partition(sector: str, limit: int = 100) -> Dict[str, Any]:
     """Fetches memories from a specific sector."""
     with db_session() as db:
@@ -189,6 +271,9 @@ def store_consolidation(
             (json.dumps(source_ids), summary, insight, now),
         )
         for conn in connections:
+            if not isinstance(conn, dict):
+                log.warning(f"Skipping malformed connection (expected dict, got {type(conn)}): {conn}")
+                continue
             from_id, to_id = conn.get("from_id"), conn.get("to_id")
             rel = conn.get("relationship", "")
             if from_id and to_id:

@@ -21,7 +21,7 @@ from config import (
     WATCH_DIRS, IGNORE_DIRS, DB_PATH, MODEL, SMART_MODEL,
     RATE_LIMIT, TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
     _shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
-    CONSOLIDATION_QUALITY_THRESHOLD
+    CONSOLIDATION_QUALITY_THRESHOLD, HAS_SQLITE_VEC
 )
 from database import init_db, db_session
 from agents_factory import build_agents
@@ -101,13 +101,13 @@ class MemoryAgent:
         raw_memories_text: str,
         max_attempts: int = 3,
         quality_threshold: float = 0.85,
-    ) -> str:
+    ) -> dict:
         """
         Generator-Evaluator adversarial loop.
         Reference: Anthropic harness design — "tuning a standalone evaluator to be skeptical turns out to be far more tractable."
         """
         import json
-        feedback = "No feedback yet. Generate the initial synthesis."
+        feedback = "No feedback yet. Generate the initial synthesis as a JSON object."
         
         for attempt in range(max_attempts):
             # Step 1: Generator creates synthesis
@@ -116,19 +116,39 @@ class MemoryAgent:
                 f"Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
                 shutdown_event=_shutdown_event,
             )
-            draft = gen_result.output
+            draft_text = gen_result.output.strip()
             
+            # Basic JSON cleanup for Generator output
+            if draft_text.startswith("```json"):
+                draft_text = draft_text[7:-3].strip()
+            elif draft_text.startswith("```"):
+                draft_text = draft_text[3:-3].strip()
+            
+            try:
+                draft_data = json.loads(draft_text)
+                # Ensure it's a dictionary and has the required keys
+                if not isinstance(draft_data, dict):
+                    raise ValueError("Generator output must be a JSON object (dictionary)")
+                
+                required_keys = ["summary", "insight", "source_ids", "connections"]
+                if not all(k in draft_data for k in required_keys):
+                    missing = [k for k in required_keys if k not in draft_data]
+                    raise ValueError(f"Missing required keys in Generator output: {missing}")
+            except (json.JSONDecodeError, ValueError) as e:
+                log.warning(f"Generator returned invalid JSON, requesting retry: {e}")
+                feedback = f"Your previous output was not valid JSON or was missing keys. Error: {e}. Please ensure you return ONLY a JSON object with 'summary', 'insight', 'source_ids', and 'connections'."
+                continue
+
             # Step 2: Evaluator grades it
             eval_result = await retry_with_backoff(
                 evaluator.run,
-                f"Source memories:\n{raw_memories_text}\n\nDraft synthesis:\n{draft}\n\n"
+                f"Source memories:\n{raw_memories_text}\n\nDraft synthesis:\n{draft_text}\n\n"
                 "Grade strictly. Output JSON ONLY with score, fidelity, completeness, redundancy_removed, feedback.",
                 shutdown_event=_shutdown_event,
             )
             
             # Parse evaluation
             try:
-                # Basic JSON cleanup in case of markdown wrapping
                 eval_text = eval_result.output.strip()
                 if eval_text.startswith("```json"):
                     eval_text = eval_text[7:-3].strip()
@@ -147,16 +167,16 @@ class MemoryAgent:
             
             if score >= quality_threshold:
                 log.info(f"✅ Consolidation approved (score={score:.2f})")
-                return draft
+                return draft_data
             
             log.info(f"⚠️ Below threshold ({quality_threshold}). Feedback: {feedback[:100]}...")
         
-        log.warning(f"❌ Consolidation failed after {max_attempts} attempts. Keeping raw memories.")
+        log.warning(f"❌ Consolidation failed after {max_attempts} attempts.")
         raise Exception("Consolidation quality threshold not met after max attempts.")
 
     async def consolidate(self) -> str:
         log.info("🔄 Running periodic adversarial consolidation...")
-        from memory_store import read_unconsolidated_memories, store_consolidation
+        from memory_store import read_unconsolidated_memories, store_consolidation, store_memory
         data = read_unconsolidated_memories()
         if data["count"] < 2:
             return "Nothing to consolidate"
@@ -165,10 +185,31 @@ class MemoryAgent:
         memories_text = json.dumps(data["memories"], indent=2)
         
         try:
-            result = await self.adversarial_consolidation(
+            # 1. Run adversarial loop
+            result_data = await self.adversarial_consolidation(
                 self.generator_lite, self.evaluator_lite, memories_text
             )
-            return result
+            
+            # 2. Persist consolidation record (marks old memories as consolidated)
+            store_consolidation(
+                source_ids=result_data["source_ids"],
+                summary=result_data["summary"],
+                insight=result_data["insight"],
+                connections=result_data.get("connections", [])
+            )
+            
+            # 3. Create new Insight MemCube
+            new_cube = await store_memory(
+                raw_text=result_data["insight"],
+                summary=result_data["summary"],
+                entities=[], # Could be extracted if needed
+                topics=["consolidated-insight"],
+                importance_score=0.8,
+                sector="semantic",
+                source="adversarial-consolidation"
+            )
+            
+            return f"Consolidated {len(result_data['source_ids'])} memories into Insight Cube #{new_cube['memory_id']}"
         except Exception as e:
             log.error(f"Adversarial consolidation failed: {e}")
             return f"Consolidation failed: {e}"
@@ -192,20 +233,41 @@ class MemoryAgent:
 
     async def deep_reconsolidate(self) -> str:
         log.info(f"🧠 Running deep adversarial re-consolidation using {SMART_MODEL}...")
-        from memory_store import read_all_memories
+        from memory_store import read_all_memories, store_consolidation, store_memory
         data = read_all_memories()
         
         import json
         memories_text = json.dumps(data["memories"], indent=2)
         
         try:
-            result = await self.adversarial_consolidation(
+            # 1. Run adversarial loop with smart models
+            result_data = await self.adversarial_consolidation(
                 self.generator_smart, self.evaluator_smart, memories_text,
                 max_attempts=3, quality_threshold=0.85
             )
+            
+            # 2. Persist consolidation
+            store_consolidation(
+                source_ids=result_data["source_ids"],
+                summary=result_data["summary"],
+                insight=result_data["insight"],
+                connections=result_data.get("connections", [])
+            )
+            
+            # 3. Create high-fidelity Insight MemCube
+            new_cube = await store_memory(
+                raw_text=result_data["insight"],
+                summary=result_data["summary"],
+                entities=[],
+                topics=["deep-insight", "architectural-consensus"],
+                importance_score=0.9,
+                sector="semantic",
+                source="deep-reconsolidation"
+            )
+            
             # After consolidation, run self-improvement
             await self.self_improve()
-            return result
+            return f"Deep consolidation complete. Created Insight Cube #{new_cube['memory_id']}"
         except Exception as e:
             log.error(f"Deep adversarial consolidation failed: {e}")
             return f"Deep consolidation failed: {e}"
@@ -316,27 +378,23 @@ async def _dream_decay():
         db.commit()
 
 async def _dream_reorganize(agent: MemoryAgent):
-    """Cluster related memories and trigger adversarial consolidation for large clusters."""
-    from memory_store import read_unconsolidated_memories
-    data = read_unconsolidated_memories(limit=100)
-    if data["count"] < 3:
+    """Cluster related memories using embeddings and trigger adversarial consolidation for large clusters."""
+    from memory_store import read_unconsolidated_with_embeddings, cluster_memories_by_embedding
+    
+    # Fetch memories with embeddings
+    memories = read_unconsolidated_with_embeddings(limit=100)
+    if len(memories) < 3:
+        log.debug(f"💤 Dream: Not enough memories for clustering ({len(memories)}/3)")
         return
 
-    memories = data["memories"]
-    # Simple topic-based clustering
-    clusters = {}
-    for m in memories:
-        # Use the first topic as a cluster key if available
-        topics = m.get("topics", [])
-        topic = topics[0] if topics else "general"
-        if topic not in clusters: clusters[topic] = []
-        clusters[topic].append(m)
+    # Use embedding-based clustering
+    clusters = cluster_memories_by_embedding(memories, threshold=0.75)
     
     import json
-    for topic, cluster in clusters.items():
-        if len(cluster) >= 3:
-            log.info(f"💤 Dream: compressing cluster '{topic}' ({len(cluster)} memories)")
-            cluster_text = json.dumps(cluster, indent=2)
+    for cluster_name, cluster_members in clusters.items():
+        if len(cluster_members) >= 3:
+            log.info(f"💤 Dream: compressing {cluster_name} ({len(cluster_members)} memories)")
+            cluster_text = json.dumps(cluster_members, indent=2)
             try:
                 # Use smart agents for Dream consolidation
                 await agent.adversarial_consolidation(

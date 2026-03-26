@@ -53,12 +53,21 @@ GENERATOR_SYSTEM_PROMPT = (
     "You are a Memory Synthesis Generator. Given a set of raw memories:\n"
     "1. Identify thematic clusters among the memories\n"
     "2. For each cluster, create a single synthesized summary that preserves ALL facts\n"
-    "3. Resolve contradictions by keeping the most recent fact and noting the contradiction\n"
+    "3. Resolve contradictions by keeping the most recent fact (highest created_at) and noting the contradiction\n"
     "4. Maintain entity and topic specificity — do not over-generalize\n"
-    "5. Output your synthesis as a JSON object with keys: 'summary', 'insight', 'source_ids', 'connections'\n"
+    "5. Output your synthesis as a JSON object ONLY with the following schema:\n"
+    "   {\n"
+    "     \"summary\": \"Concise high-level summary\",\n"
+    "     \"insight\": \"Deep synthesized insight preserving all technical details\",\n"
+    "     \"source_ids\": [list of integer IDs from source memories],\n"
+    "     \"connections\": [\n"
+    "       {\"from_id\": source_id, \"to_id\": source_id, \"relationship\": \"short description\"}\n"
+    "     ]\n"
+    "   }\n"
     "6. If feedback from a previous attempt is provided, address every point specifically\n\n"
     "CRITICAL: Do not drop facts. Every entity, date, and specific detail from the source "
-    "memories must appear in your synthesis. Prefer verbatim preservation over paraphrasing."
+    "memories must appear in your synthesis. Prefer verbatim preservation over paraphrasing.\n"
+    "DO NOT call any storage tools yourself. Simply return the JSON synthesis."
 )
 
 EVALUATOR_SYSTEM_PROMPT = (
@@ -120,7 +129,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
     memory_generator_lite = Agent(
         lite_model,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
-        tools=[read_unconsolidated_memories, store_consolidation, update_memory_validity, reinforce_memory],
+        tools=[read_unconsolidated_memories], # Removed store_consolidation, update_memory_validity, reinforce_memory
     )
     memory_evaluator_lite = Agent(
         lite_model,
@@ -133,9 +142,8 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
         smart_model,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[
-            read_all_memories, store_consolidation, update_memory_validity, 
-            reinforce_memory, search_documents, read_document
-        ],
+            read_all_memories, search_documents, read_document
+        ], # Removed store_consolidation, update_memory_validity, reinforce_memory
     )
     memory_evaluator_smart = Agent(
         smart_model,

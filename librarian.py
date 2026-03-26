@@ -37,10 +37,10 @@ async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
             SELECT v.document_id, v.distance, d.path, d.chunk_text, d.chunk_index
             FROM vec_documents v
             JOIN documents d ON d.id = v.document_id
-            WHERE v.embedding MATCH vec_quantize_int8(vec_f32(?), 'unit') AND k = ?
+            WHERE v.embedding MATCH vec_int8(?) AND k = ?
             ORDER BY v.distance
             """,
-            [json.dumps(query_embedding), k],
+            [serialize_int8(query_embedding), k],
         ).fetchall()
 
         results = []
@@ -202,8 +202,8 @@ async def index_all_dirs(dirs: List[str]):
                     if embedding:
                         try:
                             db.execute(
-                                "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_quantize_int8(vec_f32(?), 'unit'))",
-                                (doc_id, json.dumps(embedding)),
+                                "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_int8(?))",
+                                (doc_id, serialize_int8(embedding)),
                             )
                         except Exception as e:
                             log.error(f"Vec insert error for {f.name}: {e}")
