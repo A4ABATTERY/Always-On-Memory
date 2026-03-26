@@ -28,33 +28,33 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Clean Shutdown** | Signal-based (`Ctrl+C` / `SIGTERM`) graceful shutdown |
 
 ## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                        Memory Agent v2                                                  │
-│                                                                                         │
-│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐   │
-│  │ IngestAgent  │  │ ConsolidateAgent │  │    QueryAgent      │  │SelfImprovement   │   │
-│  │ (Flash-Lite) │  │   (Flash-Lite)   │  │   (Flash-Lite)     │  │   (Flash)        │   │
-│  │              │  │                  │  │                    │  │                  │   │
-│  │ • store      │  │ • read uncons.   │  │ • read memories    │  │ • audit memory   │   │
-│  │   memory     │  │ • consolidate    │  │ • read history     │  │ • discover skills│   │
-│  │              │  │ • reinforce      │  │ • search documents │  │ • write SKILL.md │   │
-│  │              │  │ • close truths   │  │ • synthesize answer│  │                  │   │
-│  └──────┬───────┘  └────────┬─────────┘  └─────────┬──────────┘  └────────┬─────────┘   │
-│         │                   │                      │                      |             │
-│  ┌──────┴───────────────────┴──────────────────────┴──────────────────────┴─────┐       │
-│  │                               SQLite + sqlite-vec                            │       │
-│  │             memories │ consolidations │ documents │ vec_documents            │       │
-│  └──────────────────────────────────────────────────────────────────────────────┘       │
-│                                                                                         │
-│  Background Loops:                                                                      │
-│  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                              │
-│  • Consolidation (30m)       • Document Indexer (Debounced 60s)                         │
-│  • Deep Re-Consolidation (24h)                                                          │
-│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                            │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-```
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Memory Agent v2 (Modular)                                         │
+│                                                                                          │
+│  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
+│  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │  │
+│  │                  │  │                    │  │                  │  │                 │  │
+│  │ • Orchestrator   │  │ • PydanticAI       │  │ • File Indexer   │  │ • aiohttp API   │  │
+│  │ • CLI / Signal   │  │   definitions      │  │ • Vector Search  │  │ • Search rts    │  │
+│  │ • Ingestion      │  │ • Tools & Logic    │  │ • Debounce Logic │  │ • Ingest rts    │  │
+│  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  └──────┬──────────┘  │
+│           │                     │                       │                   │            │
+│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐  │
+│  │                                 Shared Layer                                        │  │
+│  │                    (config.py │ models.py │ database.py │ utils.py)                 │  │
+│  └────────┬─────────────────────┬───────────────────────┬───────────────────┬──────────┘  │
+│           │                     │                       │                   │            │
+│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐  │
+│  │                               Memory Store (CRUD)                                   │  │
+│  │             memories │ consolidations │ documents │ vec_documents                   │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                          │
+│  Background Loops:                                                                       │
+│  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                               │
+│  • Consolidation (30m)       • Document Indexer (Debounced 60s)                          │
+│  • Deep Re-Consolidation (24h)                                                           │
+│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                             │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 
 ## Quick Start
 
@@ -63,6 +63,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ```bash
 git clone https://github.com/A4ABATTERY/Always-On-Memory.git
 cd Always-On-Memory
+python3 -m venv .venv
+source .venv/bin/activate  # On Linux/macOS
 pip install -r requirements.txt
 ```
 
@@ -73,15 +75,15 @@ Create a `.env` file (the agent loads it automatically):
 ```env
 GOOGLE_API_KEY="your-gemini-api-key"
 
-MODEL="google-gla:gemini-3.1-flash-lite"
-SMART_MODEL="google-gla:gemini-3.0-flash"
+MODEL="gemini-3.1-flash-lite"
+SMART_MODEL="gemini-3.0-flash"
 EMBEDDING_MODEL="gemini-embedding-2-preview"
 RATE_LIMIT="15"
 
 # Comma-separated folders to index for vector search (Librarian mode)
-WATCH_DIRS=/home/you/project/src,/home/you/project/docs
+WATCH_DIRS=./
 
-# Optional: extra directory names to skip during indexing
+# Extra directory names to skip during indexing
 IGNORE_DIRS=legacy_code,vendor_lib
 ```
 
@@ -129,17 +131,12 @@ The query agent will search memories **and** indexed source code, returning an a
 - Memory citations: `[Memory 1]`, `[Memory 2]`
 - A **Relevant Files** section with paths to matching source files
 
-### 6. Manual triggers
+### 6. Verify with Tests
+
+Run the unit test suite to ensure everything is working correctly:
 
 ```bash
-# Force consolidation now
-curl -X POST http://localhost:8888/consolidate
-
-# Force deep re-consolidation (uses smarter model)
-curl -X POST http://localhost:8888/reconsolidate
-
-# Force self-improvement audit
-curl -X POST http://localhost:8888/improve
+PYTHONPATH=. ./.venv/bin/python -m unittest discover tests
 ```
 
 ## API Reference
@@ -217,28 +214,29 @@ All LLM calls use `retry_with_backoff()`:
 | Variable | Default | Description |
 |---|---|---|
 | `GOOGLE_API_KEY` | (required) | Gemini API key |
-| `MODEL` | `google-gla:gemini-3.1-flash-lite` | Lite model for ingest/consolidate/query |
-| `SMART_MODEL` | `google-gla:gemini-3.0-flash` | Smart model for deep re-consolidation |
+| `MODEL` | `gemini-3.1-flash-lite` | Lite model for ingest/consolidate/query |
+| `SMART_MODEL` | `gemini-3.0-flash` | Smart model for deep re-consolidation |
 | `EMBEDDING_MODEL` | `gemini-embedding-2-preview` | Model for vector embeddings |
 | `MEMORY_DB` | `memory.db` | SQLite database path |
 | `RATE_LIMIT` | `15` | Max concurrent model requests |
 | `WATCH_DIRS` | (empty) | Comma-separated dirs for Librarian mode |
 | `IGNORE_DIRS` | (empty) | Extra directory names to skip |
-| `SKILLS_DIR` | `.agents/skills` | Directory where self-improvement agent saves skills |
-| `DEBOUNCE_INTERVAL` | `60` | Delay (seconds) after last change before starting indexing |
-| `SCAN_INTERVAL` | `5` | Frequency (seconds) for checking file modifications |
+| `SKILLS_DIR` | `.agent/skills` | Directory where skills are stored |
 
 ## Project Structure
 
-```
-Always-On-Memory/
-├── agent.py          # Main agent (PydanticAI + aiohttp)
-├── requirements.txt  # Dependencies
-├── .env              # Configuration (auto-loaded)
-├── inbox/            # Drop files here for auto-ingestion
-├── memory.db         # SQLite + sqlite-vec database (auto-created)
-└── docs/             # Assets
-```
+The project has been refactored into focused, type-safe modules:
+
+- `agent.py`: Principal entry point and background loop orchestrator.
+- `agents_factory.py`: PydanticAI agent definitions and tool mapping.
+- `config.py`: Centralized environment variable loading and settings.
+- `database.py`: SQLite connection and `sqlite-vec` initialization.
+- `librarian.py`: Semantic file search (Librarian) logic and debounce loop.
+- `memory_store.py`: CRUD operations for memory persistence and rankings.
+- `models.py`: Immutable Pydantic data models for core entities.
+- `server.py`: aiohttp API server implementation.
+- `utils.py`: Shared utilities for embeddings and error handling.
+- `tests/`: Comprehensive unit test suite covering core functionality.
 
 ## Built With
 
