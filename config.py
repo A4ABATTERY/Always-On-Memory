@@ -29,15 +29,15 @@ def _load_dotenv() -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-    if key and key not in os.environ:  # don't override existing env vars
+        if key and key not in os.environ:  # don't override existing env vars
             os.environ[key] = value
 
 _load_dotenv()
 
 # ─── Config ────────────────────────────────────────────────────
 
-MODEL: str = os.getenv("MODEL", "google-gla:gemini-3.1-flash-lite")
-SMART_MODEL: str = os.getenv("SMART_MODEL", "google-gla:gemini-3.0-flash")
+MODEL: str = os.getenv("MODEL", "gemini-3.1-flash-lite")
+SMART_MODEL: str = os.getenv("SMART_MODEL", "gemini-3.0-flash")
 DB_PATH: str = os.getenv("MEMORY_DB", "memory.db")
 RATE_LIMIT: int = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
