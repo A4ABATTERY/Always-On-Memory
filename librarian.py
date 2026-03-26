@@ -60,9 +60,9 @@ def read_document(path: str) -> Dict[str, Any]:
     
     # Security: check if path is within allowed directories
     # Note: This list should be updated based on actual WATCH_DIRS
-    allowed_dirs = [Path("inbox").resolve(), Path(SKILLS_DIR).resolve()]
+    allowed_dirs = [Path("inbox").resolve(), Path(SKILLS_DIR).expanduser().resolve()]
     if WATCH_DIRS:
-        allowed_dirs.extend([Path(d.strip()).resolve() for d in WATCH_DIRS.split(",") if d.strip()])
+        allowed_dirs.extend([Path(d.strip()).expanduser().resolve() for d in WATCH_DIRS.split(",") if d.strip()])
     
     # Improved security: use is_relative_to if available (Python 3.9+)
     is_allowed = False
@@ -114,7 +114,7 @@ def _get_latest_mtime(dirs: List[str]) -> float:
 
     latest_mtime = 0.0
     for dir_path in dirs:
-        folder = Path(dir_path)
+        folder = Path(dir_path).expanduser().resolve()
         if not folder.is_dir():
             continue
         
@@ -140,7 +140,7 @@ async def index_all_dirs(dirs: List[str]):
     skipped = 0
 
     for dir_path in dirs:
-        folder = Path(dir_path)
+        folder = Path(dir_path).expanduser().resolve()
         if not folder.is_dir():
             continue
 
@@ -218,6 +218,9 @@ async def librarian_loop():
         return
 
     dirs = [d.strip() for d in WATCH_DIRS.split(",") if d.strip()]
+    
+    # Resolve and expand all dirs once at startup
+    dirs = [str(Path(d).expanduser().resolve()) for d in dirs]
     
     with db_session() as db:
         row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
