@@ -2,43 +2,40 @@
   <img src="docs/gemini_flash_lite_agent_banner.jpeg" alt="Always-On Agent Memory Layer" width="100%">
 </p>
 
-# Always-On Memory Agent v2
+# Always-On Memory Agent v3
 
-**A persistent AI memory system with librarian-grade code search — built with [PydanticAI](https://ai.pydantic.dev/) + Gemini**
+**A self-optimizing, portable memory system — built with [PydanticAI](https://ai.pydantic.dev/) + Gemini**
 
-Most AI agents have amnesia. They process information, then forget everything. This agent gives any LLM-based system a persistent, evolving memory that runs 24/7 — continuously ingesting, consolidating, decaying, and serving knowledge.
+Most AI agents have amnesia. They process information, then forget everything. This agent gives any LLM-based system a persistent, evolving memory that runs 24/7 — continuously ingesting, consolidating, dreaming, and serving knowledge.
 
-**v2** adds vector search over source code (Librarian mode), smart re-consolidation via a stronger model, rate-limit resilience, and a clean PydanticAI architecture.
+**v3** transforms Always-On-Memory into a self-optimizing system, introducing portable "MemCubes," adversarial consolidation harnesses, active AutoDream optimization cycles, and TurboQuant-inspired vector compression.
 
 ## Features
 
 | Feature | Description |
 |---|---|
-| **Memory Ingestion** | Process text files from an inbox folder or via HTTP API |
-| **Consolidation** | Periodic synthesis of memories — finds patterns, connections, and contradictions |
-| **Composite Scoring** | Ranks memories by `importance × recency` with explainable recall traces |
-| **Memory Decay** | Activity-aware decay loop culls stale, unconsolidated noise |
-| **Temporal Truth Windows** | Tracks `valid_from` / `valid_to` to handle evolving facts |
-| **Memory Reinforcement** | Consolidation agent boosts importance of confirmed knowledge |
-| **Librarian Mode** | Indexes source code via `sqlite-vec` embeddings for semantic file search |
-| **Search API** | Dedicated endpoint for semantic code search across your project |
-| **Deep Re-Consolidation** | 24h cycle using a smarter model (Gemini 3.0 Flash) for deep insight |
-| **Self-Improvement** | Autonomously evolves project skills by analyzing failure patterns (EvoSkill) |
-| **Rate-Limit Resilience** | Exponential backoff with retry on 429 / quota errors |
-| **Clean Shutdown** | Signal-based (`Ctrl+C` / `SIGTERM`) graceful shutdown |
+| **MemCubes** | Standardized, portable memory units for cross-platform migration |
+| **Adversarial Consolidation** | Multi-agent (Generator-Evaluator) harness for high-fidelity memory synthesis |
+| **AutoDream Cycles** | Idle-time "sleep" phase that prunes, reorganizes, and clusters MemCubes |
+| **TurboQuant 3.5-bit** | Random orthogonal rotations + scalar quantization (3.5-bit precision) for high-fidelity vector compression |
+| **Memory Ingestion** | Multimodal ingestion (text, images, audio, video) via Inbox or HTTP |
+| **Librarian Mode** | High-performance semantic code search with debounced indexing |
+| **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
+| **Self-Improvement** | Autonomously evolves project-specific skills and patterns (EvoSkill) |
+| **Rate-Limit Resilience** | Production-grade exponential backoff for Gemini API quotas |
 
 ## Architecture
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│                        Memory Agent v2 (Modular)                                         │
+│                        Always-On-Memory (v3)                                             │
 │                                                                                          │
 │  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐ │
 │  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │ │
 │  │                  │  │                    │  │                  │  │                 │ │
-│  │ • Orchestrator   │  │ • PydanticAI       │  │ • File Indexer   │  │ • aiohttp API   │ │
-│  │ • CLI / Signal   │  │   definitions      │  │ • Vector Search  │  │ • Search rts    │ │
-│  │ • Ingestion      │  │ • Tools & Logic    │  │ • Debounce Logic │  │ • Ingest rts    │ │
+│  │ • Process Leader │  │ • Gen-Eval Harness │  │ • TurboQuant     │  │ • REST API      │ │
+│  │ • AutoDream Loop │  │ • PydanticAI       │  │ • Vector Indexer │  │ • Cube Im/Ex    │ │
+│  │ • Inbox Watcher  │  │ • Tool Mapping     │  │ • Search Logic   │  │ • Search/Query  │ │
 │  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  └──────┬──────────┘ │
 │           │                     │                       │                   │            │
 │  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
@@ -47,15 +44,15 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │  └────────┬─────────────────────┬───────────────────────┬───────────────────┬──────────┘ │
 │           │                     │                       │                   │            │
 │  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
-│  │                               Memory Store (CRUD)                                   │ │
-│  │             memories │ consolidations │ documents │ vec_documents                   │ │
+│  │                            MemCube Store (SQLite-Vec)                               │ │
+│  │             memories (int8) │ consolidations │ files │ vec_index (int8)             │ │
 │  └─────────────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                          │
-│  Background Loops:                                                                       │
-│  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                               │
-│  • Consolidation (30m)       • Document Indexer (Debounced 60s)                          │
+│  Active Cycles:                                                                          │
+│  • Inbox Watcher (5s)        • AutoDream (When Idle > 30m)                               │
+│  • Consolidation (30m)       • Librarian Indexer (Debounced 60s)                         │
 │  • Deep Re-Consolidation (24h)                                                           │
-│  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                             │
+│  • Self-Improvement Audit (24h)                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -146,16 +143,18 @@ PYTHONPATH=. ./.venv/bin/python -m unittest discover tests
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/status` | GET | Memory & index statistics |
-| `/memories` | GET | List all stored memories (ranked by composite score) |
-| `/ingest` | POST | Ingest text `{"text": "...", "source": "..."}` |
-| `/query?q=...` | GET | Query memories + search indexed documents (synthesized answer) |
-| `/search?q=...` | GET | Direct semantic search over documents (file paths + snippets) |
-| `/consolidate` | POST | Trigger manual consolidation |
-| `/reconsolidate` | POST | Trigger deep re-consolidation (smart model) |
+| `/status` | GET | MemCube & index statistics |
+| `/memories` | GET | List all stored MemCubes (ranked by score) |
+| `/ingest` | POST | Ingest text or metadata `{"text": "...", "source": "..."}` |
+| `/query?q=...` | GET | Query MemCubes + search documents (synthesized answer) |
+| `/search?q=...` | GET | Direct semantic search over files (snippets + paths) |
+| `/export_cubes` | GET | Export MemCubes as portable JSON `?ids=1,2,3` |
+| `/import_cubes` | POST | Import portable MemCube JSON `{"cubes": [...]}` |
+| `/consolidate` | POST | Trigger manual adversarial consolidation |
+| `/reconsolidate` | POST | Trigger deep re-consolidation (Pro model) |
 | `/improve` | POST | Trigger manual self-improvement audit |
-| `/delete` | POST | Delete a memory `{"memory_id": 1}` |
-| `/clear` | POST | Delete all memories (full reset) |
+| `/delete` | POST | Delete a MemCube `{"memory_id": 1}` |
+| `/clear` | POST | Full MemOS reset (clears database & inbox) |
 
 ## CLI Options
 
@@ -195,15 +194,16 @@ When `WATCH_DIRS` is set, the agent periodically scans those directories for cha
 
 Files are chunked (1500 chars), embedded, and stored in a `vec0` virtual table for cosine similarity search.
 
-## How Decay Works
+## How AutoDream Works
 
-The decay loop runs periodically and prevents memory bloat:
+The AutoDream cycle replaces passive decay with active optimization using embedding-based clustering:
 
-1. **Activity check** — If no new memories in the last 2 hours, decay is **paused** (prevents amnesia during idle periods)
-2. **Age filter** — Only unconsolidated memories older than 24h are candidates
-3. **Gradual discount** — Importance reduced by 0.05 per cycle
-4. **Culling** — Memories below 0.1 importance are deleted
-5. **Consolidated memories are safe** — Only unconsolidated noise decays
+1. **Idle Detection** — If no system activity occurs for 30 minutes, the Dream sequence begins.
+2. **Importance Decay** — Gradual discount of importance scores for unconsolidated memories (-0.05).
+3. **Redundancy Pruning** — Identifies and deletes exact or near-duplicate MemCubes.
+4. **Embedding Clustering** — Groups related MemCubes using greedy semantic similarity (numpy-optimized).
+5. **Adversarial Synthesis** — For clusters >= 3, triggers the Generator-Evaluator harness to compress the cluster into a single, high-fidelity Insight cube.
+6. **Zero Bloat** — Ensures the system remains streamlined without manual maintenance.
 
 ## Rate Limit Handling
 

@@ -80,6 +80,36 @@ def build_http(agent: Any, watch_path: str = "./inbox") -> web.Application:
         results = await search_documents(q, k=k)
         return web.json_response(results)
 
+    async def handle_export_cubes(request: web.Request) -> web.Response:
+        """Export all memories as portable MemCube JSON."""
+        from memory_store import export_cubes
+        ids_param = request.query.get("ids", "")
+        ids = [int(i) for i in ids_param.split(",") if i.strip()] if ids_param else None
+        result = export_cubes(memory_ids=ids)
+        return web.json_response(result)
+
+    async def handle_import_cubes(request: web.Request) -> web.Response:
+        """Import MemCube JSON into the database."""
+        from memory_store import import_cubes
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        
+        # Handle both {"cubes": [...]} and [...]
+        if isinstance(data, list):
+            cubes = data
+        elif isinstance(data, dict):
+            cubes = data.get("cubes", [])
+        else:
+            return web.json_response({"error": "invalid format: expected list or object with 'cubes' array"}, status=400)
+
+        if not cubes:
+            return web.json_response({"error": "missing or empty 'cubes' array"}, status=400)
+            
+        result = await import_cubes(cubes)
+        return web.json_response(result)
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -90,5 +120,7 @@ def build_http(agent: Any, watch_path: str = "./inbox") -> web.Application:
     app.router.add_post("/delete", handle_delete)
     app.router.add_post("/clear", handle_clear)
     app.router.add_get("/search", handle_search)
+    app.router.add_get("/export_cubes", handle_export_cubes)
+    app.router.add_post("/import_cubes", handle_import_cubes)
 
     return app

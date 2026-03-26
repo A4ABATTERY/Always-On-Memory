@@ -10,6 +10,9 @@ import time
 from pathlib import Path
 from typing import List, Optional, Any, Callable
 
+import numpy as np
+from turboquant import get_turboquant
+
 from config import (
     BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL,
     _shutdown_event  # This will be tricky if _shutdown_event is in main
@@ -48,6 +51,14 @@ def is_binary_file(file_path: Path) -> bool:
 def serialize_f32(vector: List[float]) -> bytes:
     """Serialize a list of floats into compact binary format for sqlite-vec."""
     return struct.pack("%sf" % len(vector), *vector)
+
+def serialize_int8(vector: List[float]) -> bytes:
+    """
+    TurboQuant-enhanced scalar quantization: rotation → int8.
+    Uses a persistent random orthogonal rotation to improve quantization fidelity.
+    """
+    tq = get_turboquant(dim=len(vector))
+    return tq.quantize_to_int8(vector)
 
 async def retry_with_backoff(
     coro_fn: Callable, 

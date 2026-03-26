@@ -51,6 +51,11 @@ SKILLS_DIR: str = os.getenv("SKILLS_DIR", ".agents/skills")
 DEBOUNCE_INTERVAL: int = int(os.getenv("DEBOUNCE_INTERVAL", "60"))  # seconds to wait after last change before indexing
 SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "5"))          # seconds between checking for modifications
 
+# AutoDream configuration
+IDLE_THRESHOLD_MINUTES: int = int(os.getenv("IDLE_THRESHOLD_MINUTES", "30"))
+AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300"))  # 5 min
+CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
+
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS: set[str] = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}
 MEDIA_EXTENSIONS: dict[str, str] = {

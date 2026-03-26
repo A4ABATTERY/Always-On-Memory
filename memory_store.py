@@ -4,37 +4,101 @@ Memory Store Module — Encapsulates database operations for memories and consol
 
 import json
 import logging
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
-from database import db_session
-from models import Memory, Consolidation
+import numpy as np
+from database import db_session, HAS_SQLITE_VEC
+from models import MemCube, Consolidation
+from utils import serialize_int8, embed_text
 
 log = logging.getLogger("memory-agent.store")
 
-def store_memory(
+async def store_memory(
     raw_text: str,
     summary: str,
     entities: List[str],
     topics: List[str],
-    importance: float,
+    importance_score: float,
     sector: str = "semantic",
     valid_to: Optional[str] = None,
     source: str = "",
+    origin_platform: str = "aom-local",
+    metadata: Optional[Dict[str, Any]] = None,
+    embedding: Optional[List[float]] = None,
+    cube_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Store a processed memory in the database."""
+    """Store a MemCube in the database."""
+    if embedding is None:
+        embedding = await embed_text(raw_text) or []
+
     with db_session() as db:
         now = datetime.now(timezone.utc).isoformat()
-        cursor = db.execute(
-            """INSERT INTO memories (source, raw_text, summary, entities, topics, importance, created_at, sector, valid_to)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (source, raw_text, summary, json.dumps(entities), json.dumps(topics), importance, now, sector, valid_to),
+        cube = MemCube(
+            cube_id=cube_id or str(uuid4()) if 'uuid4' in globals() else None, # Handled by Field factory
+            raw_text=raw_text,
+            summary=summary,
+            entities=entities,
+            topics=topics,
+            importance_score=importance_score,
+            sector=sector,
+            valid_to=valid_to,
+            source=source,
+            origin_platform=origin_platform,
+            metadata=metadata or {},
+            created_at=now,
         )
-        db.commit()
+        
+        # Override cube_id if provided explicitly (MemCube factory is just for defaults)
+        if cube_id:
+            # Re-create to ensure immutability is respected if frozen, 
+            # but actually MemCube uses Field(default_factory=...)
+            # The cleanest way is to pass it to the constructor.
+            cube = MemCube(
+                cube_id=cube_id,
+                raw_text=raw_text,
+                summary=summary,
+                entities=entities,
+                topics=topics,
+                importance_score=importance_score,
+                sector=sector,
+                valid_to=valid_to,
+                source=source,
+                origin_platform=origin_platform,
+                metadata=metadata or {},
+                created_at=now,
+            )
+        
+        cursor = db.execute(
+            """INSERT INTO memories (
+                cube_id, sector, source, origin_platform, raw_text, summary, 
+                entities, topics, connections, metadata, importance_score, 
+                created_at, valid_to
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                cube.cube_id, cube.sector, cube.source, cube.origin_platform, 
+                cube.raw_text, cube.summary, json.dumps(cube.entities), 
+                json.dumps(cube.topics), json.dumps(cube.connections), 
+                json.dumps(cube.metadata), cube.importance_score, 
+                cube.created_at, cube.valid_to
+            ),
+        )
         mid = cursor.lastrowid
+        
+        if embedding:
+            try:
+                db.execute(
+                    "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, vec_int8(?))",
+                    (mid, serialize_int8(embedding)),
+                )
+            except Exception as e:
+                log.error(f"Vec insert error for memory #{mid}: {e}")
+        
+        db.commit()
     
-    log.info(f"📥 Stored memory #{mid}: {summary[:60]}...")
-    return {"memory_id": mid, "status": "stored", "summary": summary}
+    log.info(f"📥 Stored MemCube #{mid} [{cube.cube_id}]: {summary[:60]}...")
+    return {"memory_id": mid, "cube_id": cube.cube_id, "status": "stored"}
 
 def read_all_memories(limit: int = 200) -> Dict[str, Any]:
     """Read and rank stored memories based on composite score."""
@@ -55,24 +119,29 @@ def read_all_memories(limit: int = 200) -> Dict[str, Any]:
         
         created_ts = created_dt.timestamp()
         age_hours = (now_ts - created_ts) / 3600.0
-        score = r["importance"] * (1.0 / (1.0 + (age_hours / 24.0)))
+        # Decay factor: importance decreases by half every 24 hours of age
+        score = r["importance_score"] * (1.0 / (1.0 + (age_hours / 24.0)))
 
         memories.append({
-            "id": r["id"], "source": r["source"], "summary": r["summary"],
+            "id": r["id"], "cube_id": r["cube_id"], "source": r["source"], 
+            "origin_platform": r["origin_platform"], "summary": r["summary"],
             "entities": json.loads(r["entities"]), "topics": json.loads(r["topics"]),
-            "importance": r["importance"], "connections": json.loads(r["connections"]),
+            "importance_score": r["importance_score"], 
+            "connections": json.loads(r["connections"]),
+            "metadata": json.loads(r["metadata"]),
+            "access_count": r["access_count"], "last_accessed": r["last_accessed"],
             "created_at": r["created_at"], "consolidated": bool(r["consolidated"]),
             "sector": r["sector"], "valid_to": r["valid_to"],
             "composite_score": score,
             "recall_reason": [
-                "High Importance" if r["importance"] > 0.7 else "Standard",
+                "High Importance" if r["importance_score"] > 0.7 else "Standard",
                 f"Age: {age_hours:.1f}h",
                 f"Score: {score:.2f}"
             ]
         })
 
     memories.sort(key=lambda x: x["composite_score"], reverse=True)
-    memories = memories[:50]
+    memories = memories[:100] # Increase limit for results
     return {"memories": memories, "count": len(memories)}
 
 def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
@@ -85,11 +154,92 @@ def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
     memories = []
     for r in rows:
         memories.append({
-            "id": r["id"], "summary": r["summary"],
+            "id": r["id"], "cube_id": r["cube_id"], "summary": r["summary"],
             "entities": json.loads(r["entities"]), "topics": json.loads(r["topics"]),
-            "importance": r["importance"], "created_at": r["created_at"],
+            "importance_score": r["importance_score"], "created_at": r["created_at"],
         })
     return {"memories": memories, "count": len(memories)}
+
+def read_unconsolidated_with_embeddings(limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetch unconsolidated memories along with their embeddings."""
+    if not HAS_SQLITE_VEC:
+        log.warning("sqlite-vec not available, cannot fetch embeddings.")
+        return []
+
+    with db_session() as db:
+        # Join memories with vec_memories to get the embeddings
+        # We use vec_to_f32 to convert the int8 quantized vector back to float list
+        rows = db.execute(
+            """
+            SELECT m.*, vec_to_f32(v.embedding) as vector 
+            FROM memories m
+            JOIN vec_memories v ON m.id = v.memory_id
+            WHERE m.consolidated = 0
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+    
+    results = []
+    for r in rows:
+        results.append({
+            "id": r["id"],
+            "cube_id": r["cube_id"],
+            "summary": r["summary"],
+            "topics": json.loads(r["topics"]),
+            "embedding": json.loads(r["vector"]) if isinstance(r["vector"], str) else r["vector"],
+            "created_at": r["created_at"]
+        })
+    return results
+
+def cluster_memories_by_embedding(memories: List[Dict[str, Any]], threshold: float = 0.75) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Greedy Similarity Clustering (Leader Algorithm).
+    Groups memories into clusters based on cosine similarity.
+    """
+    if not memories:
+        return {}
+
+    clusters: List[Dict[str, Any]] = [] # List of {centroid: np.array, members: list}
+
+    for m in memories:
+        emb = np.array(m["embedding"])
+        # Normalize for cosine similarity (dot product of unit vectors)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+        
+        best_sim = -1.0
+        best_cluster_idx = -1
+        
+        for i, cluster in enumerate(clusters):
+            # Cosine similarity = dot product since embeddings are normalized
+            sim = np.dot(emb, cluster["centroid"])
+            if sim > best_sim:
+                best_sim = sim
+                best_cluster_idx = i
+        
+        if best_sim >= threshold:
+            clusters[best_cluster_idx]["members"].append(m)
+            # Optional: update centroid (running average)
+            # clusters[best_cluster_idx]["centroid"] = (clusters[best_cluster_idx]["centroid"] + emb) / 2
+        else:
+            clusters.append({
+                "centroid": emb,
+                "members": [m]
+            })
+
+    # Convert back to a dictionary of clusters for compatibility
+    res = {}
+    for idx, cluster in enumerate(clusters):
+        # Name clusters by the first memory summary or index
+        first_mem = cluster["members"][0]
+        cluster_name = f"cluster_{idx}_{first_mem['summary'][:20].strip()}"
+        res[cluster_name] = cluster["members"]
+
+    log.info(f"🧩 Clustering identified {len(res)} semantic groups from {len(memories)} memories.")
+    return res
 
 def read_memory_partition(sector: str, limit: int = 100) -> Dict[str, Any]:
     """Fetches memories from a specific sector."""
@@ -101,8 +251,9 @@ def read_memory_partition(sector: str, limit: int = 100) -> Dict[str, Any]:
     memories = []
     for r in rows:
         memories.append({
-            "id": r["id"], "summary": r["summary"], "raw_text": r["raw_text"],
-            "importance": r["importance"], "created_at": r["created_at"],
+            "id": r["id"], "cube_id": r["cube_id"], "summary": r["summary"], 
+            "raw_text": r["raw_text"], "importance_score": r["importance_score"], 
+            "created_at": r["created_at"],
         })
     return {"sector": sector, "memories": memories, "count": len(memories)}
 
@@ -120,6 +271,9 @@ def store_consolidation(
             (json.dumps(source_ids), summary, insight, now),
         )
         for conn in connections:
+            if not isinstance(conn, dict):
+                log.warning(f"Skipping malformed connection (expected dict, got {type(conn)}): {conn}")
+                continue
             from_id, to_id = conn.get("from_id"), conn.get("to_id")
             rel = conn.get("relationship", "")
             if from_id and to_id:
@@ -127,15 +281,100 @@ def store_consolidation(
                     row = db.execute("SELECT connections FROM memories WHERE id = ?", (mid,)).fetchone()
                     if row:
                         existing = json.loads(row["connections"])
-                        existing.append({"linked_to": to_id if mid == from_id else from_id, "relationship": rel})
-                        db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
+                        linked_id = to_id if mid == from_id else from_id
+                        # Avoid duplicates
+                        if not any(c.get("linked_to") == linked_id for c in existing):
+                            existing.append({"linked_to": linked_id, "relationship": rel})
+                            db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
         
-        placeholders = ",".join("?" * len(source_ids))
-        db.execute(f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})", source_ids)
+        if source_ids:
+            placeholders = ",".join("?" * len(source_ids))
+            db.execute(f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})", source_ids)
         db.commit()
     
     log.info(f"🔄 Consolidated {len(source_ids)} memories. Insight: {insight[:80]}...")
     return {"status": "consolidated", "memories_processed": len(source_ids), "insight": insight}
+
+def increment_access(memory_id: int):
+    """Increment access count and update last_accessed timestamp."""
+    with db_session() as db:
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+            (now, memory_id)
+        )
+        db.commit()
+
+def export_cubes(memory_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    """Export memories as portable MemCube JSON."""
+    with db_session() as db:
+        if memory_ids:
+            placeholders = ",".join("?" * len(memory_ids))
+            rows = db.execute(f"SELECT * FROM memories WHERE id IN ({placeholders})", memory_ids).fetchall()
+        else:
+            rows = db.execute("SELECT * FROM memories").fetchall()
+    
+    cubes = []
+    for r in rows:
+        cube = MemCube(
+            cube_id=r["cube_id"],
+            sector=r["sector"],
+            source=r["source"],
+            origin_platform=r["origin_platform"],
+            raw_text=r["raw_text"],
+            summary=r["summary"],
+            entities=json.loads(r["entities"]),
+            topics=json.loads(r["topics"]),
+            connections=json.loads(r["connections"]),
+            metadata=json.loads(r["metadata"]),
+            importance_score=r["importance_score"],
+            access_count=r["access_count"],
+            last_accessed=r["last_accessed"],
+            created_at=r["created_at"],
+            consolidated=bool(r["consolidated"]),
+            valid_to=r["valid_to"]
+        )
+        cubes.append(cube.export_portable())
+    
+    return {"cubes": cubes, "count": len(cubes)}
+
+async def import_cubes(cubes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Import MemCube JSON into the database."""
+    imported_count = 0
+    for cube_data in cubes:
+        # Avoid duplicates by cube_id
+        with db_session() as db:
+            existing = db.execute("SELECT 1 FROM memories WHERE cube_id = ?", (cube_data.get("cube_id"),)).fetchone()
+            if existing:
+                continue
+
+        # In a real sync we might want to also import embeddings, 
+        # but for now we'll re-embed on import if missing
+        raw_text = cube_data.get("raw_text", "")
+        summary = cube_data.get("summary", "")
+        entities = cube_data.get("entities", [])
+        topics = cube_data.get("topics", [])
+        importance_score = cube_data.get("importance_score", 0.5)
+        sector = cube_data.get("sector", "semantic")
+        source = cube_data.get("source", "imported")
+        origin_platform = cube_data.get("origin_platform", "unknown")
+        metadata = cube_data.get("metadata", {})
+        
+        await store_memory(
+            raw_text=raw_text,
+            summary=summary,
+            entities=entities,
+            topics=topics,
+            importance_score=importance_score,
+            sector=sector,
+            source=source,
+            origin_platform=origin_platform,
+            metadata=metadata,
+            cube_id=cube_data.get("cube_id")
+        )
+        imported_count += 1
+        
+    return {"status": "success", "imported": imported_count}
 
 def read_consolidation_history(limit: int = 10) -> Dict[str, Any]:
     """Read past consolidation insights."""
@@ -166,6 +405,7 @@ def delete_memory(memory_id: int) -> Dict[str, Any]:
         if not row:
             return {"status": "not_found", "memory_id": memory_id}
         db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
         db.commit()
     
     log.info(f"🗑️  Deleted memory #{memory_id}")
@@ -182,14 +422,14 @@ def update_memory_validity(memory_id: int, valid_to: str) -> Dict[str, Any]:
 def reinforce_memory(memory_id: int) -> Dict[str, Any]:
     """Increase the importance of a memory and reset its decay clock."""
     with db_session() as db:
-        row = db.execute("SELECT importance FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        row = db.execute("SELECT importance_score FROM memories WHERE id = ?", (memory_id,)).fetchone()
         if not row:
             return {"status": "not_found"}
 
-        new_importance = min(1.0, row["importance"] + 0.1)
+        new_importance = min(1.0, row["importance_score"] + 0.1)
         now = datetime.now(timezone.utc).isoformat()
 
-        db.execute("UPDATE memories SET importance = ?, created_at = ? WHERE id = ?", (new_importance, now, memory_id))
+        db.execute("UPDATE memories SET importance_score = ?, created_at = ? WHERE id = ?", (new_importance, now, memory_id))
         db.commit()
-    log.info(f"💪 Reinforced memory #{memory_id} (Importance: {row['importance']:.2f} -> {new_importance:.2f})")
+    log.info(f"💪 Reinforced memory #{memory_id} (Importance: {row['importance_score']:.2f} -> {new_importance:.2f})")
     return {"status": "reinforced", "memory_id": memory_id, "new_importance": new_importance}
