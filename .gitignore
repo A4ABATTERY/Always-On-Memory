@@ -19,3 +19,4 @@ local/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+nohup.out

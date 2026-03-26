@@ -2,6 +2,7 @@
 Librarian Module — Handles document indexing, vector search, and skill management.
 """
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -214,7 +215,12 @@ async def index_all_dirs(dirs: List[str]):
 
 async def librarian_loop():
     """Periodically index documents."""
-    if not WATCH_DIRS or not HAS_SQLITE_VEC:
+    log.info("📚 Librarian loop started.")
+    if not WATCH_DIRS:
+        log.info("📚 Librarian: WATCH_DIRS is empty. Skipping indexer.")
+        return
+    if not HAS_SQLITE_VEC:
+        log.warning("📚 Librarian: sqlite-vec not found. Skipping vector indexer.")
         return
 
     dirs = [d.strip() for d in WATCH_DIRS.split(",") if d.strip()]
@@ -234,20 +240,26 @@ async def librarian_loop():
         try:
             latest_mtime = _get_latest_mtime(dirs)
             if latest_mtime > current_max_mtime:
+                log.info(f"📚 Librarian: detected changes (mtime {latest_mtime} > {current_max_mtime}). Starting debounce timer.")
                 last_change_time = time.time()
                 current_max_mtime = latest_mtime
             
-            if last_change_time and (time.time() - last_change_time >= DEBOUNCE_INTERVAL):
-                log.info("📚 Librarian: debounce window closed. Synchronizing vector index...")
-                await index_all_dirs(dirs)
-                
-                with db_session() as db:
-                    row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
-                    if row and row["last_idx"]:
-                        last_indexed_time = datetime.fromisoformat(row["last_idx"]).replace(tzinfo=timezone.utc).timestamp()
-                
-                last_change_time = None
-                current_max_mtime = last_indexed_time
+            if last_change_time:
+                elapsed = time.time() - last_change_time
+                if elapsed >= DEBOUNCE_INTERVAL:
+                    log.info(f"📚 Librarian: debounce window ({DEBOUNCE_INTERVAL}s) closed. Synchronizing vector index...")
+                    await index_all_dirs(dirs)
+                    
+                    with db_session() as db:
+                        row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
+                        if row and row["last_idx"]:
+                            last_indexed_time = datetime.fromisoformat(row["last_idx"]).replace(tzinfo=timezone.utc).timestamp()
+                    
+                    last_change_time = None
+                    current_max_mtime = last_indexed_time
+                else:
+                    if int(elapsed) % 15 == 0: # Log every 15s of debounce
+                        log.debug(f"📚 Librarian: debouncing... ({int(elapsed)}/{DEBOUNCE_INTERVAL}s)")
         except Exception as e:
             log.error(f"Indexing error: {e}")
 
