@@ -20,8 +20,7 @@ log = logging.getLogger("memory-agent.database")
 
 def get_db() -> sqlite3.Connection:
     """Get a fresh database connection, re-evaluating the path from env."""
-    db_path = os.getenv("MEMORY_DB", "memories.db") # Changed to read from env
-    db = sqlite3.connect(db_path) # Removed timeout parameter
+    db = sqlite3.connect(DB_PATH) # Removed timeout parameter
     db.row_factory = sqlite3.Row
     try:
         db.execute("PRAGMA journal_mode=WAL")
