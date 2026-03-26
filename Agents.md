@@ -1,6 +1,6 @@
-# MemOS v3: Agent Memory Integration Guide (Agents.md)
+# Always-On-Memory v3: Agent Memory Integration Guide (Agents.md)
 
-Integrating with the **Always-On Memory (MemOS v3)** architecture ensures your agent possesses long-term persistence, cross-session continuity, and a collective intelligence that evolves over time. 
+Integrating with the **Always-On-Memory v3** architecture ensures your agent possesses long-term persistence, cross-session continuity, and a collective intelligence that evolves over time. 
 
 > [!IMPORTANT]
 > **Adherence to this guide is mandatory.** Failure to query or ingest memories leads to "Context Fragmentation" and "Rediscovery Syndrome," where the agent wastes tokens solving problems already addressed in previous sessions.
@@ -9,7 +9,7 @@ Integrating with the **Always-On Memory (MemOS v3)** architecture ensures your a
 
 ## 1. Mandatory Memory Query (Prefetch)
 
-Before starting any task, the agent **must** query the MemOS for relevant context. 
+Before starting any task, the agent **must** query the system for relevant context. 
 
 ### When to Query
 - **Initial Handshake**: On session start, query for "Project status and recent architectural decisions."
@@ -55,14 +55,14 @@ curl -s "http://localhost:8888/search?q=JWT+token+validation+logic&k=3"
 
 ## 4. MemCube Portability (Export/Import)
 
-MemOS v3 treats memory as computational state that can be migrated between environments (e.g., from local dev to CI/staging).
+Always-On-Memory v3 treats memory as computational state that can be migrated between environments (e.g., from local dev to CI/staging).
 
 ```bash
 # Export all MemCubes
-curl -s "http://localhost:8888/export_cubes" > global_memory.json
+curl -s "http://localhost:8888/export_cubes" > memory_cube.json
 
 # Import into a fresh environment
-curl -X POST http://localhost:8888/import_cubes -d @global_memory.json
+curl -X POST http://localhost:8888/import_cubes -d @memory_cube.json
 ```
 
 ---

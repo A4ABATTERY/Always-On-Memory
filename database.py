@@ -50,16 +50,21 @@ def init_db() -> None:
         db.executescript("""
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cube_id TEXT NOT NULL UNIQUE,
+                sector TEXT NOT NULL DEFAULT 'semantic',
                 source TEXT NOT NULL DEFAULT '',
+                origin_platform TEXT NOT NULL DEFAULT 'aom-local',
                 raw_text TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 entities TEXT NOT NULL DEFAULT '[]',
                 topics TEXT NOT NULL DEFAULT '[]',
                 connections TEXT NOT NULL DEFAULT '[]',
-                importance REAL NOT NULL DEFAULT 0.5,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                importance_score REAL NOT NULL DEFAULT 0.5,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                last_accessed TEXT DEFAULT NULL,
                 created_at TEXT NOT NULL,
                 consolidated INTEGER NOT NULL DEFAULT 0,
-                sector TEXT NOT NULL DEFAULT 'semantic',
                 valid_to TEXT DEFAULT NULL
             );
             CREATE TABLE IF NOT EXISTS consolidations (
@@ -84,7 +89,7 @@ def init_db() -> None:
             );
         """)
 
-        # Create vec0 virtual table for vector search (if sqlite-vec loaded)
+        # Create vec0 virtual tables for vector search (if sqlite-vec loaded)
         if HAS_SQLITE_VEC:
             try:
                 # Check if vec_documents already exists
@@ -94,18 +99,22 @@ def init_db() -> None:
                     db.execute("""
                         CREATE VIRTUAL TABLE vec_documents USING vec0(
                             document_id INTEGER PRIMARY KEY,
-                            embedding float[3072]
+                            embedding int8[3072]
                         )
                     """)
                 except Exception as e:
                     log.warning(f"Could not create vec_documents: {e}")
 
-        # Migrations for existing DB
-        for col_sql in [
-            "ALTER TABLE memories ADD COLUMN sector TEXT NOT NULL DEFAULT 'semantic'",
-            "ALTER TABLE memories ADD COLUMN valid_to TEXT DEFAULT NULL",
-        ]:
             try:
-                db.execute(col_sql)
+                # Check if vec_memories already exists
+                db.execute("SELECT 1 FROM vec_memories LIMIT 1").fetchone()
             except sqlite3.OperationalError:
-                pass
+                try:
+                    db.execute("""
+                        CREATE VIRTUAL TABLE vec_memories USING vec0(
+                            memory_id INTEGER PRIMARY KEY,
+                            embedding int8[3072]
+                        )
+                    """)
+                except Exception as e:
+                    log.warning(f"Could not create vec_memories: {e}")

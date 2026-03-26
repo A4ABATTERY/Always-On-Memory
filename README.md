@@ -2,13 +2,13 @@
   <img src="docs/gemini_flash_lite_agent_banner.jpeg" alt="Always-On Agent Memory Layer" width="100%">
 </p>
 
-# Always-On Memory Agent v3 (MemOS)
+# Always-On Memory Agent v3
 
-**A self-optimizing, portable Memory Operating System — built with [PydanticAI](https://ai.pydantic.dev/) + Gemini**
+**A self-optimizing, portable memory system — built with [PydanticAI](https://ai.pydantic.dev/) + Gemini**
 
 Most AI agents have amnesia. They process information, then forget everything. This agent gives any LLM-based system a persistent, evolving memory that runs 24/7 — continuously ingesting, consolidating, dreaming, and serving knowledge.
 
-**v3** transforms AOM into a **MemOS (Memory Operating System)**, introducing portable "MemCubes," adversarial consolidation harnesses, active AutoDream optimization cycles, and TurboQuant-inspired vector compression.
+**v3** transforms Always-On-Memory into a self-optimizing system, introducing portable "MemCubes," adversarial consolidation harnesses, active AutoDream optimization cycles, and TurboQuant-inspired vector compression.
 
 ## Features
 
@@ -28,7 +28,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│                        Memory Operating System (MemOS v3)                                │
+│                        Always-On-Memory (v3)                                             │
 │                                                                                          │
 │  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐ │
 │  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │ │

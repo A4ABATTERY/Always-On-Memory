@@ -49,18 +49,31 @@ INGEST_SYSTEM_PROMPT = (
     "After storing, confirm what was stored in one sentence."
 )
 
-CONSOLIDATE_SYSTEM_PROMPT = (
-    "You are a Memory Consolidation Agent. You:\n"
-    "1. Call read_unconsolidated_memories to see what needs processing\n"
-    "2. If fewer than 2 memories, say nothing to consolidate\n"
-    "3. Find connections and patterns across the memories.\n"
-    "4. Create synthesized summaries and insights. PERFORM MULTIPLE store_consolidation "
-    "calls if memories cover disparate themes (e.g. don't mix UI and Database).\n"
-    "5. Call store_consolidation with source_ids, summary, insight, and connections\n"
-    "6. Contradictions: Call update_memory_validity for old memories if a newer memory contradicts it.\n"
-    "7. Reinforcement: Call reinforce_memory for old memories supported by new info.\n\n"
-    "Connections: list of dicts with 'from_id', 'to_id', 'relationship' keys.\n"
-    "Prioritize thematic clustering over broad summarization."
+GENERATOR_SYSTEM_PROMPT = (
+    "You are a Memory Synthesis Generator. Given a set of raw memories:\n"
+    "1. Identify thematic clusters among the memories\n"
+    "2. For each cluster, create a single synthesized summary that preserves ALL facts\n"
+    "3. Resolve contradictions by keeping the most recent fact and noting the contradiction\n"
+    "4. Maintain entity and topic specificity — do not over-generalize\n"
+    "5. Output your synthesis as a JSON object with keys: 'summary', 'insight', 'source_ids', 'connections'\n"
+    "6. If feedback from a previous attempt is provided, address every point specifically\n\n"
+    "CRITICAL: Do not drop facts. Every entity, date, and specific detail from the source "
+    "memories must appear in your synthesis. Prefer verbatim preservation over paraphrasing."
+)
+
+EVALUATOR_SYSTEM_PROMPT = (
+    "You are a Memory Synthesis Evaluator. You receive source memories and a draft synthesis.\n"
+    "Your job is to RIGOROUSLY grade the synthesis. Be skeptical. Be strict.\n\n"
+    "Grade on three dimensions (0.0 to 1.0 each):\n"
+    "- FIDELITY: Does the synthesis accurately reflect the source facts? Any hallucinated details?\n"
+    "- COMPLETENESS: Were ANY facts from the source memories omitted or glossed over?\n"
+    "- REDUNDANCY_REMOVED: Were duplicate/overlapping facts properly merged?\n\n"
+    "Overall score = min(fidelity, completeness) * 0.7 + redundancy_removed * 0.3\n\n"
+    "Output a JSON object ONLY with keys: 'score', 'fidelity', 'completeness', "
+    "'redundancy_removed', 'feedback'\n\n"
+    "The 'feedback' field must contain SPECIFIC, ACTIONABLE criticism. "
+    "Do NOT say 'good job' — find something to improve. If the score is below 0.85, "
+    "the Generator will retry with your feedback."
 )
 
 QUERY_SYSTEM_PROMPT = (
@@ -73,19 +86,6 @@ QUERY_SYSTEM_PROMPT = (
     "6. Include a 'Relevant Files' section listing file paths from search_documents results\n"
     "7. If no relevant memories exist, say so honestly\n\n"
     "Be thorough. Always cite sources."
-)
-
-DEEP_CONSOLIDATE_SYSTEM_PROMPT = (
-    "You are a Deep Memory Consolidation Agent. You are the HIGH-FIDELITY CORRECTIVE layer.\n"
-    "Your job is to catch details the 'lite' agent missed or over-summarized.\n"
-    "1. Call read_all_memories to see the full context\n"
-    "2. Call search_documents and read_document to verify facts against source code/docs\n"
-    "3. Directly link insights to relevant file paths in your summary/insight text\n"
-    "4. Look for deep architectural patterns, contradictions, and themes\n"
-    "5. Reinforce still-relevant memories (reinforce_memory)\n"
-    "6. Mark outdated facts as invalid (update_memory_validity)\n"
-    "7. PERFORM MULTIPLE store_consolidation calls for different high-level themes.\n\n"
-    "Be precise and analytical. Link facts to files."
 )
 
 SELF_IMPROVEMENT_SYSTEM_PROMPT = (
@@ -106,18 +106,9 @@ SELF_IMPROVEMENT_SYSTEM_PROMPT = (
 
 # ─── Factory Function ─────────────────────────────────────────
 
-def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent]:
-    """Build PydanticAI agents for ingest, consolidate, query, and self-improvement."""
-    
-    # These tools will be provided by MemoryAgent or passed directly
-    # Note: search_documents and read_document are defined later in the process
-    # To avoid circular imports, we'll assume they will be injected or imported carefully.
-    
-    # For now, let's keep the tool imports here but note that search_documents
-    # might need to be imported from 'librarian' or similar.
-    # In agent.py, they were all in one file.
-    
-    from librarian import search_documents, read_document, write_skill_file # Assume these exist or will be merged
+def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
+    """Build PydanticAI agents."""
+    from librarian import search_documents, read_document, write_skill_file
 
     ingest_agent = Agent(
         lite_model,
@@ -125,26 +116,37 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent]:
         tools=[store_memory],
     )
 
-    consolidate_agent = Agent(
+    # Periodic consolidation (lite)
+    memory_generator_lite = Agent(
         lite_model,
-        system_prompt=CONSOLIDATE_SYSTEM_PROMPT,
+        system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[read_unconsolidated_memories, store_consolidation, update_memory_validity, reinforce_memory],
+    )
+    memory_evaluator_lite = Agent(
+        lite_model,
+        system_prompt=EVALUATOR_SYSTEM_PROMPT,
+        tools=[],  # Evaluator only grades, no side effects
+    )
+
+    # Deep/Dream consolidation (smart)
+    memory_generator_smart = Agent(
+        smart_model,
+        system_prompt=GENERATOR_SYSTEM_PROMPT,
+        tools=[
+            read_all_memories, store_consolidation, update_memory_validity, 
+            reinforce_memory, search_documents, read_document
+        ],
+    )
+    memory_evaluator_smart = Agent(
+        smart_model,
+        system_prompt=EVALUATOR_SYSTEM_PROMPT,
+        tools=[],
     )
 
     query_agent = Agent(
         lite_model,
         system_prompt=QUERY_SYSTEM_PROMPT,
         tools=[read_all_memories, read_consolidation_history, search_documents],
-    )
-
-    deep_consolidate_agent = Agent(
-        smart_model,
-        system_prompt=DEEP_CONSOLIDATE_SYSTEM_PROMPT,
-        tools=[
-            read_all_memories, read_consolidation_history, 
-            update_memory_validity, reinforce_memory,
-            search_documents, read_document, store_consolidation
-        ],
     )
 
     self_improvement_agent = Agent(
@@ -156,4 +158,9 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent]:
         ],
     )
 
-    return ingest_agent, consolidate_agent, query_agent, deep_consolidate_agent, self_improvement_agent
+    return (
+        ingest_agent, 
+        memory_generator_lite, memory_evaluator_lite, 
+        memory_generator_smart, memory_evaluator_smart, 
+        query_agent, self_improvement_agent
+    )

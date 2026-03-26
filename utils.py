@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import List, Optional, Any, Callable
 
+import numpy as np
+
 from config import (
     BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL,
     _shutdown_event  # This will be tricky if _shutdown_event is in main
@@ -48,6 +50,19 @@ def is_binary_file(file_path: Path) -> bool:
 def serialize_f32(vector: List[float]) -> bytes:
     """Serialize a list of floats into compact binary format for sqlite-vec."""
     return struct.pack("%sf" % len(vector), *vector)
+
+def serialize_int8(vector: List[float]) -> bytes:
+    """
+    Scalar quantization: float32 → int8.
+    Normalizes the vector to unit length, then scales to [-127, 127] range.
+    sqlite-vec natively supports int8 vectors via the int8[N] column type.
+    """
+    arr = np.array(vector, dtype=np.float32)
+    norm = np.linalg.norm(arr)
+    if norm > 0:
+        arr = arr / norm
+    quantized = np.clip(np.round(arr * 127.0), -128, 127).astype(np.int8)
+    return quantized.tobytes()
 
 async def retry_with_backoff(
     coro_fn: Callable, 

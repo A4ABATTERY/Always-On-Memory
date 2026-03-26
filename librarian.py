@@ -4,6 +4,7 @@ Librarian Module — Handles document indexing, vector search, and skill managem
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -17,7 +18,7 @@ from config import (
     _shutdown_event
 )
 from database import db_session
-from utils import is_binary_file, embed_text, serialize_f32, chunk_text
+from utils import is_binary_file, embed_text, serialize_f32, serialize_int8, chunk_text
 
 log = logging.getLogger("memory-agent.librarian")
 
@@ -36,10 +37,10 @@ async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
             SELECT v.document_id, v.distance, d.path, d.chunk_text, d.chunk_index
             FROM vec_documents v
             JOIN documents d ON d.id = v.document_id
-            WHERE v.embedding MATCH ? AND k = ?
+            WHERE v.embedding MATCH vec_quantize_int8(vec_f32(?), 'unit') AND k = ?
             ORDER BY v.distance
             """,
-            [serialize_f32(query_embedding), k],
+            [json.dumps(query_embedding), k],
         ).fetchall()
 
         results = []
@@ -201,8 +202,8 @@ async def index_all_dirs(dirs: List[str]):
                     if embedding:
                         try:
                             db.execute(
-                                "INSERT INTO vec_documents (document_id, embedding) VALUES (?, ?)",
-                                (doc_id, serialize_f32(embedding)),
+                                "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_quantize_int8(vec_f32(?), 'unit'))",
+                                (doc_id, json.dumps(embedding)),
                             )
                         except Exception as e:
                             log.error(f"Vec insert error for {f.name}: {e}")
