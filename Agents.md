@@ -97,4 +97,4 @@ If the memory system becomes unavailable or returns unexpected results, follow t
 
 ### Performance Degradation
 - **Check DB Size**: If `memory.db` exceeds 1GB, manually trigger `/reconsolidate` to force an adversarial audit and pruning cycle.
-- **TurboQuant Status**: Ensure `sqlite-vec` is correctly loaded (Check `/status`).
+- **TurboQuant 3.5-bit Status**: Ensure `sqlite-vec` is correctly loaded and the rotation matrix is initialized (Check `/status`).

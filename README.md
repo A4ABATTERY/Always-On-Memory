@@ -17,7 +17,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **MemCubes** | Standardized, portable memory units for cross-platform migration |
 | **Adversarial Consolidation** | Multi-agent (Generator-Evaluator) harness for high-fidelity memory synthesis |
 | **AutoDream Cycles** | Idle-time "sleep" phase that prunes, reorganizes, and clusters MemCubes |
-| **TurboQuant Compression** | Scalar quantization (float32 → int8) for 4x-6x vector database compression |
+| **TurboQuant 3.5-bit** | Random orthogonal rotations + scalar quantization (3.5-bit precision) for high-fidelity vector compression |
 | **Memory Ingestion** | Multimodal ingestion (text, images, audio, video) via Inbox or HTTP |
 | **Librarian Mode** | High-performance semantic code search with debounced indexing |
 | **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
@@ -196,12 +196,12 @@ Files are chunked (1500 chars), embedded, and stored in a `vec0` virtual table f
 
 ## How AutoDream Works
 
-The AutoDream cycle replaces passive decay with active optimization:
+The AutoDream cycle replaces passive decay with active optimization using embedding-based clustering:
 
 1. **Idle Detection** — If no system activity occurs for 30 minutes, the Dream sequence begins.
 2. **Importance Decay** — Gradual discount of importance scores for unconsolidated memories (-0.05).
 3. **Redundancy Pruning** — Identifies and deletes exact or near-duplicate MemCubes.
-4. **Topic Clustering** — Groups related MemCubes together semantically.
+4. **Embedding Clustering** — Groups related MemCubes using greedy semantic similarity (numpy-optimized).
 5. **Adversarial Synthesis** — For clusters >= 3, triggers the Generator-Evaluator harness to compress the cluster into a single, high-fidelity Insight cube.
 6. **Zero Bloat** — Ensures the system remains streamlined without manual maintenance.
 
