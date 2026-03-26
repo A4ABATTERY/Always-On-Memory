@@ -33,23 +33,23 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
 │                        Memory Agent v2 (Modular)                                         │
 │                                                                                          │
-│  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
-│  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │  │
-│  │                  │  │                    │  │                  │  │                 │  │
-│  │ • Orchestrator   │  │ • PydanticAI       │  │ • File Indexer   │  │ • aiohttp API   │  │
-│  │ • CLI / Signal   │  │   definitions      │  │ • Vector Search  │  │ • Search rts    │  │
-│  │ • Ingestion      │  │ • Tools & Logic    │  │ • Debounce Logic │  │ • Ingest rts    │  │
-│  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  └──────┬──────────┘  │
+│  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐ │
+│  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │ │
+│  │                  │  │                    │  │                  │  │                 │ │
+│  │ • Orchestrator   │  │ • PydanticAI       │  │ • File Indexer   │  │ • aiohttp API   │ │
+│  │ • CLI / Signal   │  │   definitions      │  │ • Vector Search  │  │ • Search rts    │ │
+│  │ • Ingestion      │  │ • Tools & Logic    │  │ • Debounce Logic │  │ • Ingest rts    │ │
+│  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  └──────┬──────────┘ │
 │           │                     │                       │                   │            │
-│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐  │
-│  │                                 Shared Layer                                        │  │
-│  │                    (config.py │ models.py │ database.py │ utils.py)                 │  │
-│  └────────┬─────────────────────┬───────────────────────┬───────────────────┬──────────┘  │
+│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
+│  │                                 Shared Layer                                        │ │
+│  │                    (config.py │ models.py │ database.py │ utils.py)                 │ │
+│  └────────┬─────────────────────┬───────────────────────┬───────────────────┬──────────┘ │
 │           │                     │                       │                   │            │
-│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐  │
-│  │                               Memory Store (CRUD)                                   │  │
-│  │             memories │ consolidations │ documents │ vec_documents                   │  │
-│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
+│  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
+│  │                               Memory Store (CRUD)                                   │ │
+│  │             memories │ consolidations │ documents │ vec_documents                   │ │
+│  └─────────────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                          │
 │  Background Loops:                                                                       │
 │  • Inbox Watcher (5s)        • Decay Loop (activity-aware)                               │
