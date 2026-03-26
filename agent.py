@@ -59,6 +59,18 @@ class MemoryAgent:
         
         self.client = genai.Client() if HAS_GENAI else None
 
+    async def ingest_file(self, file_path: Path) -> str:
+        """Ingest a text-based file from the inbox."""
+        suffix = file_path.suffix.lower()
+        if suffix in TEXT_EXTENSIONS:
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="replace")[:10000]
+                if text.strip():
+                    return await self.ingest(text, source=file_path.name)
+            except Exception as e:
+                log.error(f"Failed to read {file_path}: {e}")
+        return f"Skipped: unsupported or empty file {file_path.name}"
+
     async def ingest(self, text: str, source: str = "") -> str:
         log.info(f"📥 Analyzing {'file: ' + source if source else 'text content'} ({len(text)} chars)...")
         msg = f"Remember this information (source: {source}):\n\n{text}" if source else f"Remember this information:\n\n{text}"
@@ -125,6 +137,12 @@ class MemoryAgent:
             db.execute("DELETE FROM memories")
             db.execute("DELETE FROM consolidations")
             db.execute("DELETE FROM processed_files")
+            db.execute("DELETE FROM documents") # Clear Librarian docs
+            if HAS_SQLITE_VEC:
+                try:
+                    db.execute("DELETE FROM vec_documents") # Clear Librarian vectors
+                except Exception:
+                    pass
             db.commit()
 
         files_deleted = 0
@@ -321,7 +339,7 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    def _signal_handler(sig):
+    def _signal_handler(sig=None):
         _shutdown_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
