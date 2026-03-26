@@ -28,6 +28,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Clean Shutdown** | Signal-based (`Ctrl+C` / `SIGTERM`) graceful shutdown |
 
 ## Architecture
+
+```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
 │                        Memory Agent v2 (Modular)                                         │
 │                                                                                          │
@@ -55,6 +57,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │  • Deep Re-Consolidation (24h)                                                           │
 │  • Self-Improvement Audit (24h, after Deep Re-Consolidation)                             │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
@@ -81,7 +84,7 @@ EMBEDDING_MODEL="gemini-embedding-2-preview"
 RATE_LIMIT="15"
 
 # Comma-separated folders to index for vector search (Librarian mode)
-WATCH_DIRS=./
+WATCH_DIRS=/home/you/project/src,/home/you/project/docs
 
 # Extra directory names to skip during indexing
 IGNORE_DIRS=legacy_code,vendor_lib
