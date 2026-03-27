@@ -137,13 +137,13 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     # Periodic consolidation (lite)
     memory_generator_lite = Agent(
         lite_model,
-        result_type=SynthesisResult,
+        output_type=SynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[read_unconsolidated_memories, search_documents, read_document],
     )
     memory_evaluator_lite = Agent(
         lite_model,
-        result_type=EvalResult,
+        output_type=EvalResult,
         system_prompt=EVALUATOR_SYSTEM_PROMPT,
         tools=[],
     )
@@ -151,7 +151,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     # Deep/Dream consolidation (smart)
     memory_generator_smart = Agent(
         smart_model,
-        result_type=SynthesisResult,
+        output_type=SynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[
             read_all_memories, search_documents, read_document
@@ -159,7 +159,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     )
     memory_evaluator_smart = Agent(
         smart_model,
-        result_type=EvalResult,
+        output_type=EvalResult,
         system_prompt=EVALUATOR_SYSTEM_PROMPT,
         tools=[],
     )
@@ -181,7 +181,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
 
     sync_agent = Agent(
         lite_model,
-        result_type=AuditResult,
+        output_type=AuditResult,
         system_prompt=SYNC_AUDITOR_SYSTEM_PROMPT,
         tools=[], # Only analysis
     )
