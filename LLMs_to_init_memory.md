@@ -39,4 +39,4 @@ To provide continuity, scan the local system for previous conversation artifacts
 ## Phase 3: Final Verification
 1.  **Check Status**: Call `GET /status`.
 2.  **Verify**: Ensure `total_memories > 0` and `indexed_documents` reflects the codebase size.
-3.  **Test Query**: Run a test query like `GET /query?q=Summarize the project architecture` to verify grounding.
+3.  **Test Query**: Run a test query like `GET /query?q=Summarize the project architecture` to verify grounding. 
