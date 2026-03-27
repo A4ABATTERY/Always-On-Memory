@@ -55,6 +55,8 @@ SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "5"))          # seconds bet
 IDLE_THRESHOLD_MINUTES: int = int(os.getenv("IDLE_THRESHOLD_MINUTES", "30"))
 AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300"))  # 5 min
 CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
+DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
+
 
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS: set[str] = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}

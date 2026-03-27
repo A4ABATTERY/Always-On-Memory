@@ -53,7 +53,23 @@ curl -s "http://localhost:8888/search?q=JWT+token+validation+logic&k=3"
 
 ---
 
-## 4. MemCube Portability (Export/Import)
+## 4. Structural Linkage (V3.1+)
+
+Always-On-Memory v3 now performs **Structural Linkage** during consolidation cycles. This explicitly maps high-level architectural decisions to concrete file paths.
+
+### Advantages
+- **L1 Cache Retrieval**: If a memory has a `file_link`, the Query Agent retrieves that file directly, bypassing the expensive vector search.
+- **Context Grounding**: The agent "understands" that a specific MemCube is the implementation of a specific file.
+
+### How to Leverage
+You do not need to do anything manually. The consolidation agents use `search_documents` during their "dream" phase to build these links. However, you can query for these links:
+```bash
+curl -s "http://localhost:8888/query?q=Which+files+are+linked+to+the+consolidation+logic?"
+```
+
+---
+
+## 5. MemCube Portability (Export/Import)
 
 Always-On-Memory v3 treats memory as computational state that can be migrated between environments (e.g., from local dev to CI/staging).
 

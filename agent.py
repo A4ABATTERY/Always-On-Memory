@@ -67,11 +67,91 @@ class MemoryAgent:
             self.evaluator_smart,
             self.query_agent,
             self.self_improvement_agent,
+            self.sync_agent,
         ) = build_agents()
         
         self.client = genai.Client() if HAS_GENAI else None
+        self.sync_queue: asyncio.Queue = asyncio.Queue()
+
+    async def push_sync_task(self, path: str, memory_id: int):
+        """Callback for Librarian to push drift detection tasks."""
+        await self.sync_queue.put({"path": path, "memory_id": memory_id})
+        log.debug(f"📤 Pushed sync task for memory #{memory_id} on '{path}'")
+
+    async def _audit_link(self, path: str, memory_id: int):
+        """Use the Sync Agent to audit a link after drift is detected."""
+        from librarian import read_document
+        from memory_store import update_link_status
+        import json
+
+        # 1. Get current code snippet
+        doc = read_document(path)
+        if "error" in doc:
+            log.warning(f"Sync audit failed: {doc['error']}")
+            return
+
+        # 2. Get memory insight
+        with db_session() as db:
+            row = db.execute("SELECT summary, raw_text FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        
+        if not row:
+            return
+            
+        insight = f"Summary: {row['summary']}\nDetails: {row['raw_text']}"
+        code_snippet = doc["content"][:4000] # Limit for Lite agent
+
+        # 3. Ask Sync Agent
+        log.info(f"⚖️ Auditing memory #{memory_id} against '{path}'...")
+        try:
+            result = await retry_with_backoff(
+                self.sync_agent.run,
+                f"MEMORY INSIGHT:\n{insight}\n\nCODE SNIPPET:\n{code_snippet}",
+                shutdown_event=_shutdown_event
+            )
+            
+            # Clean JSON
+            text = result.output.strip()
+            if text.startswith("```json"): text = text[7:-3].strip()
+            elif text.startswith("```"): text = text[3:-3].strip()
+            
+            data = json.loads(text)
+            status = data.get("status", "HISTORICAL").upper()
+            reason = data.get("reason", "No reason provided.")
+            suggested = data.get("suggested_update")
+            
+            if status == "HISTORICAL":
+                log.info(f"📜 Link evolved to HISTORICAL for memory #{memory_id}: {reason}")
+                update_link_status(memory_id, path, "historical_trace")
+            elif status == "REPAIR" and suggested:
+                log.info(f"🛠️  Repairing memory #{memory_id}: {reason}")
+                from memory_store import repair_memory
+                repair_memory(memory_id, suggested)
+                update_link_status(memory_id, path, "active") # Ensure it's active and noted
+            else:
+                log.info(f"✅ Link remains ACTIVE for memory #{memory_id}: {reason}")
+                # We update metadata anyway to show it was audited
+                update_link_status(memory_id, path, "active")
+                
+        except Exception as e:
+            log.error(f"Sync audit error for memory #{memory_id}: {e}")
+
+    async def sync_worker_loop(self):
+        """Worker that consumes the sync queue."""
+        log.info("⛓️ Sync worker loop started.")
+        while not _shutdown_event.is_set():
+            try:
+                # Wait for task with timeout to check shutdown
+                task = await asyncio.wait_for(self.sync_queue.get(), timeout=5.0)
+                await self._audit_link(task["path"], task["memory_id"])
+                self.sync_queue.task_done()
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                log.error(f"Sync worker loop error: {e}")
 
     async def ingest_file(self, file_path: Path) -> str:
+# ... (rest of the file)
+
         """Ingest a text-based file from the inbox."""
         record_activity()
         suffix = file_path.suffix.lower()
@@ -138,6 +218,18 @@ class MemoryAgent:
                 log.warning(f"Generator returned invalid JSON, requesting retry: {e}")
                 feedback = f"Your previous output was not valid JSON or was missing keys. Error: {e}. Please ensure you return ONLY a JSON object with 'summary', 'insight', 'source_ids', and 'connections'."
                 continue
+            
+            # Type normalization for source_ids (ensure it is a list of scalars)
+            draft_ids = draft_data.get("source_ids", [])
+            if isinstance(draft_ids, list):
+                # Flatten any nested lists (LLM behavior)
+                flat_ids = []
+                for item in draft_ids:
+                    if isinstance(item, list):
+                        flat_ids.extend(item)
+                    else:
+                        flat_ids.append(item)
+                draft_data["source_ids"] = flat_ids
 
             # Step 2: Evaluator grades it
             eval_result = await retry_with_backoff(
@@ -204,6 +296,7 @@ class MemoryAgent:
                 summary=result_data["summary"],
                 entities=[], # Could be extracted if needed
                 topics=["consolidated-insight"],
+                connections=result_data.get("connections", []),
                 importance_score=0.8,
                 sector="semantic",
                 source="adversarial-consolidation"
@@ -260,6 +353,7 @@ class MemoryAgent:
                 summary=result_data["summary"],
                 entities=[],
                 topics=["deep-insight", "architectural-consensus"],
+                connections=result_data.get("connections", []),
                 importance_score=0.9,
                 sector="semantic",
                 source="deep-reconsolidation"
@@ -526,8 +620,10 @@ async def main_async(args):
         asyncio.create_task(consolidation_loop(agent, args.consolidate_every)),
         asyncio.create_task(autodream_loop(agent, AUTODREAM_CHECK_INTERVAL)),
         asyncio.create_task(deep_reconsolidate_loop(agent, 24)),
-        asyncio.create_task(librarian_loop()),
+        asyncio.create_task(librarian_loop(on_drift_detected=agent.push_sync_task)),
+        asyncio.create_task(agent.sync_worker_loop()),
     ]
+
 
     app = build_http(agent, watch_path=args.watch)
     runner = web.AppRunner(app)

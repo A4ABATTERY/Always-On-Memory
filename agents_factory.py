@@ -61,10 +61,13 @@ GENERATOR_SYSTEM_PROMPT = (
     "     \"insight\": \"Deep synthesized insight preserving all technical details\",\n"
     "     \"source_ids\": [list of integer IDs from source memories],\n"
     "     \"connections\": [\n"
-    "       {\"from_id\": source_id, \"to_id\": source_id, \"relationship\": \"short description\"}\n"
+    "       {\"type\": \"memory_link\", \"from_id\": id, \"to_id\": id, \"relationship\": \"...\"},\n"
+    "       {\"type\": \"file_link\", \"path\": \"file_path\", \"relationship\": \"...\", \"confidence\": 0.95}\n"
     "     ]\n"
     "   }\n"
-    "6. If feedback from a previous attempt is provided, address every point specifically\n\n"
+    "6. STRUCTURAL LINKAGE: Use search_documents to identify the 1-2 most relevant file paths for this cluster. "
+    "Include them as 'file_link' objects in the connections array.\n"
+    "7. If feedback from a previous attempt is provided, address every point specifically\n\n"
     "CRITICAL: Do not drop facts. Every entity, date, and specific detail from the source "
     "memories must appear in your synthesis. Prefer verbatim preservation over paraphrasing.\n"
     "DO NOT call any storage tools yourself. Simply return the JSON synthesis."
@@ -89,11 +92,11 @@ QUERY_SYSTEM_PROMPT = (
     "You are a Memory Query Agent. When asked a question:\n"
     "1. Call read_all_memories to access the memory store\n"
     "2. Call read_consolidation_history for higher-level insights\n"
-    "3. Call search_documents to find relevant source code files or documents\n"
-    "4. Synthesize an answer based ONLY on stored memories\n"
-    "5. Reference memory IDs: [Memory 1], [Memory 2], etc.\n"
-    "6. Include a 'Relevant Files' section listing file paths from search_documents results\n"
-    "7. If no relevant memories exist, say so honestly\n\n"
+    "3. Call search_documents ONLY as a fallback if no valid 'file_link' exists in relevant memories\n"
+    "4. Prioritize context from 'file_link' paths found in structural connections\n"
+    "5. Synthesize an answer based ONLY on stored memories and linked or searched files\n"
+    "6. Reference memory IDs: [Memory 1], [Memory 2], etc.\n"
+    "7. Include a 'Relevant Files' section listing file paths from structural links or fallback search\n\n"
     "Be thorough. Always cite sources."
 )
 
@@ -113,9 +116,35 @@ SELF_IMPROVEMENT_SYSTEM_PROMPT = (
     "Be proactive. If you see a way to make the Orchestrator more reliable, codify it as a skill."
 )
 
+SYNC_AUDITOR_SYSTEM_PROMPT = (
+    "You are a Memory-Code Link Integrity Auditor. Your task is to rigorously evaluate "
+    "if a specific Memory Insight is still an accurate and grounded description of a given Code Snippet.\n\n"
+    "States:\n"
+    "- ACTIVE: The Memory Insight's core assertions, business logic, or architectural rules "
+    "are still present and accurately implemented in the Code Snippet. Minor refactors, "
+    "whitespace changes, or variable renaming should NOT trigger a status change.\n"
+    "- REPAIR: The core logic or intent is still present, but the implementation details "
+    "have diverged enough that the Memory Insight's technical details are now slightly "
+    "inaccurate. The link should remain active, but the memory needs an update.\n"
+    "- HISTORICAL: The core logic described in the Memory Insight has been significantly "
+    "changed, replaced (e.g., switched algorithm), or removed. The memory no longer "
+    "describes the current state, but is a valid historical trace.\n\n"
+    "Decision Logic:\n"
+    "1. Does the Code Snippet still contain the functionality described in the Insight?\n"
+    "2. If refactored, is the architectural 'spirit' or 'intent' of the memory still honored?\n"
+    "3. Has the implementation diverged to a different pattern or behavior?\n\n"
+    "Output a JSON object ONLY with:\n"
+    "  {\n"
+    "    \"status\": \"ACTIVE\" | \"HISTORICAL\" | \"REPAIR\",\n"
+    "    \"reason\": \"A brief (1 sentence) technical explanation of your decision\",\n"
+    "    \"suggested_update\": \"If REPAIR, provide a 1-2 sentence corrected version of the insight\" \n"
+    "  }\n\n"
+    "Be precise and skeptical. Your decision ensures grounding integrity."
+)
+
 # ─── Factory Function ─────────────────────────────────────────
 
-def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
+def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
     """Build PydanticAI agents."""
     from librarian import search_documents, read_document, write_skill_file
 
@@ -129,12 +158,12 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
     memory_generator_lite = Agent(
         lite_model,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
-        tools=[read_unconsolidated_memories], # Removed store_consolidation, update_memory_validity, reinforce_memory
+        tools=[read_unconsolidated_memories, search_documents, read_document],
     )
     memory_evaluator_lite = Agent(
         lite_model,
         system_prompt=EVALUATOR_SYSTEM_PROMPT,
-        tools=[],  # Evaluator only grades, no side effects
+        tools=[],
     )
 
     # Deep/Dream consolidation (smart)
@@ -143,7 +172,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[
             read_all_memories, search_documents, read_document
-        ], # Removed store_consolidation, update_memory_validity, reinforce_memory
+        ],
     )
     memory_evaluator_smart = Agent(
         smart_model,
@@ -166,9 +195,17 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
         ],
     )
 
+    sync_agent = Agent(
+        lite_model,
+        system_prompt=SYNC_AUDITOR_SYSTEM_PROMPT,
+        tools=[], # Only analysis
+    )
+
     return (
         ingest_agent, 
         memory_generator_lite, memory_evaluator_lite, 
         memory_generator_smart, memory_evaluator_smart, 
-        query_agent, self_improvement_agent
+        query_agent, self_improvement_agent,
+        sync_agent
     )
+

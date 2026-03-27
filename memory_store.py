@@ -26,6 +26,7 @@ async def store_memory(
     source: str = "",
     origin_platform: str = "aom-local",
     metadata: Optional[Dict[str, Any]] = None,
+    connections: Optional[List[Dict[str, Any]]] = None,
     embedding: Optional[List[float]] = None,
     cube_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -41,6 +42,7 @@ async def store_memory(
             summary=summary,
             entities=entities,
             topics=topics,
+            connections=connections or [],
             importance_score=importance_score,
             sector=sector,
             valid_to=valid_to,
@@ -61,6 +63,7 @@ async def store_memory(
                 summary=summary,
                 entities=entities,
                 topics=topics,
+                connections=connections or [],
                 importance_score=importance_score,
                 sector=sector,
                 valid_to=valid_to,
@@ -274,22 +277,51 @@ def store_consolidation(
             if not isinstance(conn, dict):
                 log.warning(f"Skipping malformed connection (expected dict, got {type(conn)}): {conn}")
                 continue
-            from_id, to_id = conn.get("from_id"), conn.get("to_id")
-            rel = conn.get("relationship", "")
-            if from_id and to_id:
-                for mid in [from_id, to_id]:
-                    row = db.execute("SELECT connections FROM memories WHERE id = ?", (mid,)).fetchone()
-                    if row:
-                        existing = json.loads(row["connections"])
-                        linked_id = to_id if mid == from_id else from_id
-                        # Avoid duplicates
-                        if not any(c.get("linked_to") == linked_id for c in existing):
-                            existing.append({"linked_to": linked_id, "relationship": rel})
-                            db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
+            
+            conn_type = conn.get("type", "memory_link")
+            rel = str(conn.get("relationship", ""))
+
+            if conn_type == "memory_link":
+                from_id, to_id = conn.get("from_id"), conn.get("to_id")
+                if from_id and to_id:
+                    for mid in [from_id, to_id]:
+                        row = db.execute("SELECT connections FROM memories WHERE id = ?", (mid,)).fetchone()
+                        if row:
+                            existing = json.loads(row["connections"])
+                            linked_id = to_id if mid == from_id else from_id
+                            # Avoid duplicates
+                            if not any(c.get("linked_to") == linked_id for c in existing):
+                                existing.append({"type": "memory_link", "linked_to": linked_id, "relationship": rel})
+                                db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
+            
+            elif conn_type == "file_link":
+                file_path = conn.get("path")
+                if file_path:
+                    # We can't easily 'link' both ways in the documents table, 
+                    # so we store the file link in the consolidated memory's metadata.
+                    # Note: source_ids is defined outside this loop but related to this consolidation.
+                    pass # Handled by the Insight cube creation in agent.py
         
-        if source_ids:
-            placeholders = ",".join("?" * len(source_ids))
-            db.execute(f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})", source_ids)
+        # Robust flattening and int-casting for source_ids (LLMs keep returning nested lists)
+        flattened_ids = []
+        if isinstance(source_ids, list):
+            for item in source_ids:
+                if isinstance(item, list):
+                    flattened_ids.extend(item)
+                else:
+                    flattened_ids.append(item)
+        
+        # Ensure all IDs are integers
+        clean_ids = []
+        for mid in flattened_ids:
+            try:
+                clean_ids.append(int(mid))
+            except (ValueError, TypeError):
+                log.warning(f"Skipping invalid source ID: {mid}")
+        
+        if clean_ids:
+            placeholders = ",".join("?" * len(clean_ids))
+            db.execute(f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})", clean_ids)
         db.commit()
     
     log.info(f"🔄 Consolidated {len(source_ids)} memories. Insight: {insight[:80]}...")
@@ -390,12 +422,30 @@ def get_memory_stats() -> Dict[str, Any]:
         unconsolidated = db.execute("SELECT COUNT(*) as c FROM memories WHERE consolidated = 0").fetchone()["c"]
         consolidations = db.execute("SELECT COUNT(*) as c FROM consolidations").fetchone()["c"]
         indexed_docs = db.execute("SELECT COUNT(DISTINCT path) as c FROM documents").fetchone()["c"]
+        
+        # Count structural links (active vs historical)
+        active_links = 0
+        historical_links = 0
+        rows = db.execute("SELECT connections FROM memories WHERE connections LIKE '%file_link%'").fetchall()
+        for r in rows:
+            conns = json.loads(r["connections"])
+            for c in conns:
+                if c.get("type") == "file_link":
+                    if c.get("status", "active") == "active":
+                        active_links += 1
+                    elif c.get("status") == "historical_trace":
+                        historical_links += 1
     
     return {
         "total_memories": total,
         "unconsolidated": unconsolidated,
         "consolidations": consolidations,
         "indexed_documents": indexed_docs,
+        "structural_links": {
+            "active": active_links,
+            "historical_trace": historical_links,
+            "total": active_links + historical_links
+        }
     }
 
 def delete_memory(memory_id: int) -> Dict[str, Any]:
@@ -433,3 +483,75 @@ def reinforce_memory(memory_id: int) -> Dict[str, Any]:
         db.commit()
     log.info(f"💪 Reinforced memory #{memory_id} (Importance: {row['importance_score']:.2f} -> {new_importance:.2f})")
     return {"status": "reinforced", "memory_id": memory_id, "new_importance": new_importance}
+
+def update_link_status(memory_id: int, path: str, new_status: str) -> Dict[str, Any]:
+    """
+    Update the status of a file_link in a memory's connections.
+    Transitions links from 'active' to 'historical_trace' (or other states).
+    """
+    with db_session() as db:
+        row = db.execute("SELECT connections FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            return {"status": "not_found", "memory_id": memory_id}
+
+        connections = json.loads(row["connections"])
+        updated = False
+        for conn in connections:
+            if conn.get("type") == "file_link" and conn.get("path") == path:
+                old_status = conn.get("status", "active")
+                if old_status != new_status:
+                    conn["status"] = new_status
+                    conn["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    updated = True
+        
+        if updated:
+            db.execute(
+                "UPDATE memories SET connections = ? WHERE id = ?", 
+                (json.dumps(connections), memory_id)
+            )
+            db.commit()
+            log.info(f"🔗 Updated link status for memory #{memory_id} path '{path}' to '{new_status}'")
+            return {"status": "updated", "memory_id": memory_id, "path": path, "new_status": new_status}
+        
+        return {"status": "no_change", "memory_id": memory_id, "path": path}
+
+def repair_memory(memory_id: int, new_raw_text: str) -> Dict[str, Any]:
+    """
+    Update a memory's raw_text after drift is detected and a repair is suggested.
+    Also resets the created_at timestamp to signify a refresh.
+    """
+    with db_session() as db:
+        row = db.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            return {"status": "not_found", "memory_id": memory_id}
+
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            "UPDATE memories SET raw_text = ?, created_at = ? WHERE id = ?", 
+            (new_raw_text, now, memory_id)
+        )
+        db.commit()
+        log.info(f"🛠️  Repaired memory #{memory_id} with updated insight.")
+        return {"status": "repaired", "memory_id": memory_id}
+
+def get_all_links() -> Dict[str, Any]:
+    """Retrieve all file_links from memory connections."""
+    links = []
+    with db_session() as db:
+        rows = db.execute("SELECT id, summary, connections FROM memories WHERE connections LIKE '%file_link%'").fetchall()
+        for r in rows:
+            conns = json.loads(r["connections"])
+            for c in conns:
+                if c.get("type") == "file_link":
+                    links.append({
+                        "memory_id": r["id"],
+                        "memory_summary": r["summary"][:60],
+                        "path": c.get("path"),
+                        "status": c.get("status", "active"),
+                        "relationship": c.get("relationship", ""),
+                        "updated_at": c.get("updated_at")
+                    })
+    return {"links": links, "count": len(links)}
+
+
+
