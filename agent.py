@@ -7,29 +7,27 @@ Refactored into a modular architecture for better maintainability and type safet
 import argparse
 import asyncio
 import logging
-import os
 import shutil
 import signal
-import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic_ai import Agent
 from aiohttp import web
 from config import (
-    WATCH_DIRS, IGNORE_DIRS, DB_PATH, MODEL, SMART_MODEL,
-    RATE_LIMIT, TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
+    SMART_MODEL,
+    TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
     _shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
-    CONSOLIDATION_QUALITY_THRESHOLD, HAS_SQLITE_VEC
+    HAS_SQLITE_VEC
 )
 from database import init_db, db_session
 from agents_factory import build_agents
 from utils import retry_with_backoff
 from memory_store import (
-    get_memory_stats, read_all_memories, delete_memory
+    read_all_memories
 )
-from librarian import search_documents, librarian_loop
+from librarian import librarian_loop
 from server import build_http
 
 try:
@@ -82,13 +80,13 @@ class MemoryAgent:
         """Use the Sync Agent to audit a link after drift is detected."""
         from librarian import read_document
         from memory_store import update_link_status
-        import json
+        from models import AuditResult
 
         # 1. Get current code snippet
         doc = read_document(path)
         if "error" in doc:
             log.warning(f"Sync audit failed: {doc['error']}")
-            return
+            raise Exception(f"Document read error: {doc['error']}")
 
         # 2. Get memory insight
         with db_session() as db:
@@ -100,49 +98,57 @@ class MemoryAgent:
         insight = f"Summary: {row['summary']}\nDetails: {row['raw_text']}"
         code_snippet = doc["content"][:4000] # Limit for Lite agent
 
-        # 3. Ask Sync Agent
+        # 3. Ask Sync Agent (Structured Result)
         log.info(f"⚖️ Auditing memory #{memory_id} against '{path}'...")
-        try:
-            result = await retry_with_backoff(
-                self.sync_agent.run,
-                f"MEMORY INSIGHT:\n{insight}\n\nCODE SNIPPET:\n{code_snippet}",
-                shutdown_event=_shutdown_event
-            )
-            
-            # Clean JSON
-            text = result.output.strip()
-            if text.startswith("```json"): text = text[7:-3].strip()
-            elif text.startswith("```"): text = text[3:-3].strip()
-            
-            data = json.loads(text)
-            status = data.get("status", "HISTORICAL").upper()
-            reason = data.get("reason", "No reason provided.")
-            suggested = data.get("suggested_update")
-            
-            if status == "HISTORICAL":
-                log.info(f"📜 Link evolved to HISTORICAL for memory #{memory_id}: {reason}")
-                update_link_status(memory_id, path, "historical_trace")
-            elif status == "REPAIR" and suggested:
-                log.info(f"🛠️  Repairing memory #{memory_id}: {reason}")
-                from memory_store import repair_memory
-                repair_memory(memory_id, suggested)
-                update_link_status(memory_id, path, "active") # Ensure it's active and noted
-            else:
-                log.info(f"✅ Link remains ACTIVE for memory #{memory_id}: {reason}")
-                # We update metadata anyway to show it was audited
-                update_link_status(memory_id, path, "active")
-                
-        except Exception as e:
-            log.error(f"Sync audit error for memory #{memory_id}: {e}")
+        result = await retry_with_backoff(
+            self.sync_agent.run,
+            f"MEMORY INSIGHT:\n{insight}\n\nCODE SNIPPET:\n{code_snippet}",
+            shutdown_event=_shutdown_event
+        )
+        
+        data: AuditResult = result.data
+        status = data.status.upper()
+        reason = data.reason
+        suggested = data.suggested_update
+        
+        if status == "HISTORICAL":
+            log.info(f"📜 Link evolved to HISTORICAL for memory #{memory_id}: {reason}")
+            update_link_status(memory_id, path, "historical_trace")
+        elif status == "REPAIR" and suggested:
+            log.info(f"🛠️  Repairing memory #{memory_id}: {reason}")
+            from memory_store import repair_memory
+            repair_memory(memory_id, suggested)
+            update_link_status(memory_id, path, "active")
+        else:
+            log.info(f"✅ Link remains ACTIVE for memory #{memory_id}: {reason}")
+            update_link_status(memory_id, path, "active")
 
     async def sync_worker_loop(self):
-        """Worker that consumes the sync queue."""
+        """Worker that consumes the sync queue with transient error retries."""
         log.info("⛓️ Sync worker loop started.")
+        retry_counts = {} # path:memory_id -> count
+        MAX_RETRIES = 3
+        
         while not _shutdown_event.is_set():
             try:
-                # Wait for task with timeout to check shutdown
                 task = await asyncio.wait_for(self.sync_queue.get(), timeout=5.0)
-                await self._audit_link(task["path"], task["memory_id"])
+                task_key = f"{task['path']}:{task['memory_id']}"
+                
+                try:
+                    await self._audit_link(task["path"], task["memory_id"])
+                    if task_key in retry_counts:
+                        del retry_counts[task_key]
+                except Exception as e:
+                    count = retry_counts.get(task_key, 0) + 1
+                    if count <= MAX_RETRIES:
+                        log.warning(f"⚠️ Sync audit failed for {task_key} (attempt {count}/{MAX_RETRIES}): {e}. Re-queueing...")
+                        retry_counts[task_key] = count
+                        await self.sync_queue.put(task)
+                    else:
+                        log.error(f"❌ Sync audit permanently failed for {task_key} after {MAX_RETRIES} retries: {e}")
+                        if task_key in retry_counts:
+                            del retry_counts[task_key]
+                
                 self.sync_queue.task_done()
             except asyncio.TimeoutError:
                 continue
@@ -183,83 +189,37 @@ class MemoryAgent:
         quality_threshold: float = 0.85,
     ) -> dict:
         """
-        Generator-Evaluator adversarial loop.
-        Reference: Anthropic harness design — "tuning a standalone evaluator to be skeptical turns out to be far more tractable."
+        Generator-Evaluator adversarial loop using PydanticAI structured results.
         """
-        import json
-        feedback = "No feedback yet. Generate the initial synthesis as a JSON object."
+        from models import SynthesisResult, EvalResult
+        feedback = "No feedback yet. Generate the initial synthesis."
         
         for attempt in range(max_attempts):
-            # Step 1: Generator creates synthesis
+            # Step 1: Generator creates synthesis (Structured Result)
             gen_result = await retry_with_backoff(
                 generator.run,
                 f"Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
                 shutdown_event=_shutdown_event,
             )
-            draft_text = gen_result.output.strip()
+            draft_data: SynthesisResult = gen_result.data
             
-            # Basic JSON cleanup for Generator output
-            if draft_text.startswith("```json"):
-                draft_text = draft_text[7:-3].strip()
-            elif draft_text.startswith("```"):
-                draft_text = draft_text[3:-3].strip()
-            
-            try:
-                draft_data = json.loads(draft_text)
-                # Ensure it's a dictionary and has the required keys
-                if not isinstance(draft_data, dict):
-                    raise ValueError("Generator output must be a JSON object (dictionary)")
-                
-                required_keys = ["summary", "insight", "source_ids", "connections"]
-                if not all(k in draft_data for k in required_keys):
-                    missing = [k for k in required_keys if k not in draft_data]
-                    raise ValueError(f"Missing required keys in Generator output: {missing}")
-            except (json.JSONDecodeError, ValueError) as e:
-                log.warning(f"Generator returned invalid JSON, requesting retry: {e}")
-                feedback = f"Your previous output was not valid JSON or was missing keys. Error: {e}. Please ensure you return ONLY a JSON object with 'summary', 'insight', 'source_ids', and 'connections'."
-                continue
-            
-            # Type normalization for source_ids (ensure it is a list of scalars)
-            draft_ids = draft_data.get("source_ids", [])
-            if isinstance(draft_ids, list):
-                # Flatten any nested lists (LLM behavior)
-                flat_ids = []
-                for item in draft_ids:
-                    if isinstance(item, list):
-                        flat_ids.extend(item)
-                    else:
-                        flat_ids.append(item)
-                draft_data["source_ids"] = flat_ids
-
-            # Step 2: Evaluator grades it
+            # Step 2: Evaluator grades it (Structured Result)
             eval_result = await retry_with_backoff(
                 evaluator.run,
-                f"Source memories:\n{raw_memories_text}\n\nDraft synthesis:\n{draft_text}\n\n"
+                f"Source memories:\n{raw_memories_text}\n\nDraft synthesis:\n{draft_data.model_dump_json()}\n\n"
                 "Grade strictly. Output JSON ONLY with score, fidelity, completeness, redundancy_removed, feedback.",
                 shutdown_event=_shutdown_event,
             )
             
-            # Parse evaluation
-            try:
-                eval_text = eval_result.output.strip()
-                if eval_text.startswith("```json"):
-                    eval_text = eval_text[7:-3].strip()
-                elif eval_text.startswith("```"):
-                    eval_text = eval_text[3:-3].strip()
-                
-                eval_data = json.loads(eval_text)
-                score = eval_data.get("score", 0.0)
-                feedback = eval_data.get("feedback", "No specific feedback.")
-            except (json.JSONDecodeError, AttributeError) as e:
-                log.warning(f"Evaluator returned non-JSON output, treating as failure: {e}")
-                score = 0.0
-                feedback = f"Evaluator raw output: {eval_result.output}"
+            eval_data: EvalResult = eval_result.data
+            score = eval_data.score
+            feedback = eval_data.feedback
             
             log.info(f"🔄 Consolidation attempt {attempt+1}: score={score:.2f}")
             
             if score >= quality_threshold:
                 log.info(f"✅ Consolidation approved (score={score:.2f})")
-                return draft_data
+                return draft_data.model_dump()
             
             log.info(f"⚠️ Below threshold ({quality_threshold}). Feedback: {feedback[:100]}...")
         
@@ -326,7 +286,7 @@ class MemoryAgent:
 
     async def deep_reconsolidate(self) -> str:
         log.info(f"🧠 Running deep adversarial re-consolidation using {SMART_MODEL}...")
-        from memory_store import read_all_memories, store_consolidation, store_memory
+        from memory_store import store_consolidation, store_memory
         data = read_all_memories()
         
         import json
@@ -424,7 +384,6 @@ async def autodream_loop(agent: MemoryAgent, check_interval: int = 300):
     Activates only when system has been idle for IDLE_THRESHOLD_MINUTES.
     Performs: importance decay → redundancy pruning → topic clustering → adversarial consolidation.
     """
-    from config import IDLE_THRESHOLD_MINUTES, CONSOLIDATION_QUALITY_THRESHOLD
     
     log.info(f"💤 AutoDream: checking every {check_interval}s, triggers after {IDLE_THRESHOLD_MINUTES}min idle")
     
@@ -453,12 +412,12 @@ async def autodream_loop(agent: MemoryAgent, check_interval: int = 300):
 
 async def _dream_decay():
     """Prune memories that have decayed below threshold."""
-    from memory_store import delete_memory
     with db_session() as db:
         rows = db.execute("SELECT id, importance_score, created_at FROM memories WHERE consolidated = 0").fetchall()
         for r in rows:
             created_dt = datetime.fromisoformat(r["created_at"])
-            if created_dt.tzinfo is None: created_dt = created_dt.replace(tzinfo=timezone.utc)
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
             
             age_hours = (datetime.now(timezone.utc).timestamp() - created_dt.timestamp()) / 3600.0
             if age_hours > 24.0:
@@ -631,12 +590,13 @@ async def main_async(args):
     site = web.TCPSite(runner, "0.0.0.0", args.port)
     await site.start()
 
-    log.info(f"✅ Agent running. Press Ctrl+C to stop.")
+    log.info("✅ Agent running. Press Ctrl+C to stop.")
 
     try:
         await _shutdown_event.wait()
     finally:
-        for t in tasks: t.cancel()
+        for t in tasks:
+            t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await runner.cleanup()
         log.info("🧠 Agent stopped.")

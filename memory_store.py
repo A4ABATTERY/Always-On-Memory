@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 
 import numpy as np
 from database import db_session, HAS_SQLITE_VEC
-from models import MemCube, Consolidation
+from models import MemCube
 from utils import serialize_int8, embed_text
 
 log = logging.getLogger("memory-agent.store")

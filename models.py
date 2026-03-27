@@ -2,7 +2,6 @@
 Models Module — Defines immutable data structures using Pydantic.
 """
 
-from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -49,6 +48,21 @@ class MemCube(BaseModel):
     def export_portable(self) -> Dict[str, Any]:
         """Export cube in a portable format for cross-platform migration."""
         return self.model_dump(exclude={"id", "composite_score", "recall_reason"})
+
+class SynthesisResult(BaseModel):
+    """Structured output from the Memory Synthesis Generator agent."""
+    model_config = ConfigDict(frozen=True)
+    summary: str = Field(..., description="Concise high-level summary")
+    insight: str = Field(..., description="Deep synthesized insight preserving all technical details")
+    source_ids: List[int] = Field(..., description="List of integer IDs from source memories")
+    connections: List[Dict[str, Any]] = Field(default_factory=list, description="Structural links (memory_link, file_link)")
+
+class AuditResult(BaseModel):
+    """Structured output from the Memory-Code Link Integrity Auditor agent."""
+    model_config = ConfigDict(frozen=True)
+    status: str = Field(..., description="ACTIVE | HISTORICAL | REPAIR")
+    reason: str = Field(..., description="A brief technical explanation of the decision")
+    suggested_update: Optional[str] = Field(None, description="Corrected version of the insight if status is REPAIR")
 
 class EvalResult(BaseModel):
     """Structured output from the Adversarial Evaluator agent."""

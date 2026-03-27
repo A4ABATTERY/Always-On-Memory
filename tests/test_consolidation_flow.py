@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from agent import MemoryAgent
 from database import init_db, db_session
 from memory_store import store_memory
+from models import SynthesisResult, EvalResult
 
 class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
     
@@ -53,23 +54,23 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
 
         # 2. Mock Agent Responses
         # Generator synthesis
-        gen_output = json.dumps({
-            "summary": "London summary",
-            "insight": "London is cold and has a bridge.",
-            "source_ids": [m1["memory_id"], m2["memory_id"]],
-            "connections": [{"from_id": m1["memory_id"], "to_id": m2["memory_id"], "relationship": "same_city"}]
-        })
-        self.agent.generator_lite.run.return_value = MagicMock(output=gen_output)
+        gen_data = SynthesisResult(
+            summary="London summary",
+            insight="London is cold and has a bridge.",
+            source_ids=[m1["memory_id"], m2["memory_id"]],
+            connections=[{"from_id": m1["memory_id"], "to_id": m2["memory_id"], "relationship": "same_city"}]
+        )
+        self.agent.generator_lite.run.return_value = MagicMock(data=gen_data)
         
         # Evaluator approval
-        eval_output = json.dumps({
-            "score": 0.9,
-            "feedback": "Good",
-            "fidelity": 1.0,
-            "completeness": 1.0,
-            "redundancy_removed": 1.0
-        })
-        self.agent.evaluator_lite.run.return_value = MagicMock(output=eval_output)
+        eval_data = EvalResult(
+            score=0.9,
+            feedback="Good",
+            fidelity=1.0,
+            completeness=1.0,
+            redundancy_removed=1.0
+        )
+        self.agent.evaluator_lite.run.return_value = MagicMock(data=eval_data)
 
         # 3. Trigger Consolidation
         msg = await self.agent.consolidate()

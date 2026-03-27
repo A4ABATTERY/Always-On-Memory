@@ -6,11 +6,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from config import (
     WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS, 
@@ -18,7 +17,7 @@ from config import (
     _shutdown_event
 )
 from database import db_session
-from utils import is_binary_file, embed_text, serialize_f32, serialize_int8, chunk_text
+from utils import is_binary_file, embed_text, serialize_int8, chunk_text
 
 log = logging.getLogger("memory-agent.librarian")
 
@@ -141,7 +140,6 @@ async def _check_semantic_drift(path: str, new_embeddings: List[List[float]], on
     Check if current active memories linked to this path have drifted semantically.
     """
     from config import DRIFT_THRESHOLD
-    import json
     import numpy as np
     
     # Calculate centroid of new embeddings

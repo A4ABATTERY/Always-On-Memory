@@ -5,12 +5,12 @@ Agents Factory Module — Builds PydanticAI agents for various tasks.
 from typing import Tuple
 from pydantic_ai import Agent
 
-from config import MODEL, SMART_MODEL, RATE_LIMIT, SKILLS_DIR
+from config import MODEL, SMART_MODEL, RATE_LIMIT
 from memory_store import (
-    store_memory, read_unconsolidated_memories, store_consolidation,
-    update_memory_validity, reinforce_memory, read_all_memories,
-    read_consolidation_history, read_memory_partition
+    store_memory, read_unconsolidated_memories, 
+    read_all_memories, read_consolidation_history, read_memory_partition
 )
+from models import SynthesisResult, AuditResult, EvalResult
 
 # ─── Rate-Limited Model Helper ────────────────────────────────
 
@@ -55,22 +55,11 @@ GENERATOR_SYSTEM_PROMPT = (
     "2. For each cluster, create a single synthesized summary that preserves ALL facts\n"
     "3. Resolve contradictions by keeping the most recent fact (highest created_at) and noting the contradiction\n"
     "4. Maintain entity and topic specificity — do not over-generalize\n"
-    "5. Output your synthesis as a JSON object ONLY with the following schema:\n"
-    "   {\n"
-    "     \"summary\": \"Concise high-level summary\",\n"
-    "     \"insight\": \"Deep synthesized insight preserving all technical details\",\n"
-    "     \"source_ids\": [list of integer IDs from source memories],\n"
-    "     \"connections\": [\n"
-    "       {\"type\": \"memory_link\", \"from_id\": id, \"to_id\": id, \"relationship\": \"...\"},\n"
-    "       {\"type\": \"file_link\", \"path\": \"file_path\", \"relationship\": \"...\", \"confidence\": 0.95}\n"
-    "     ]\n"
-    "   }\n"
-    "6. STRUCTURAL LINKAGE: Use search_documents to identify the 1-2 most relevant file paths for this cluster. "
-    "Include them as 'file_link' objects in the connections array.\n"
-    "7. If feedback from a previous attempt is provided, address every point specifically\n\n"
+    "5. STRUCTURAL LINKAGE: Use search_documents to identify the 1-2 most relevant file paths for this cluster.\n"
+    "6. If feedback from a previous attempt is provided, address every point specifically\n\n"
     "CRITICAL: Do not drop facts. Every entity, date, and specific detail from the source "
     "memories must appear in your synthesis. Prefer verbatim preservation over paraphrasing.\n"
-    "DO NOT call any storage tools yourself. Simply return the JSON synthesis."
+    "DO NOT call any storage tools yourself."
 )
 
 EVALUATOR_SYSTEM_PROMPT = (
@@ -81,11 +70,8 @@ EVALUATOR_SYSTEM_PROMPT = (
     "- COMPLETENESS: Were ANY facts from the source memories omitted or glossed over?\n"
     "- REDUNDANCY_REMOVED: Were duplicate/overlapping facts properly merged?\n\n"
     "Overall score = min(fidelity, completeness) * 0.7 + redundancy_removed * 0.3\n\n"
-    "Output a JSON object ONLY with keys: 'score', 'fidelity', 'completeness', "
-    "'redundancy_removed', 'feedback'\n\n"
     "The 'feedback' field must contain SPECIFIC, ACTIONABLE criticism. "
-    "Do NOT say 'good job' — find something to improve. If the score is below 0.85, "
-    "the Generator will retry with your feedback."
+    "Do NOT say 'good job' — find something to improve."
 )
 
 QUERY_SYSTEM_PROMPT = (
@@ -133,12 +119,6 @@ SYNC_AUDITOR_SYSTEM_PROMPT = (
     "1. Does the Code Snippet still contain the functionality described in the Insight?\n"
     "2. If refactored, is the architectural 'spirit' or 'intent' of the memory still honored?\n"
     "3. Has the implementation diverged to a different pattern or behavior?\n\n"
-    "Output a JSON object ONLY with:\n"
-    "  {\n"
-    "    \"status\": \"ACTIVE\" | \"HISTORICAL\" | \"REPAIR\",\n"
-    "    \"reason\": \"A brief (1 sentence) technical explanation of your decision\",\n"
-    "    \"suggested_update\": \"If REPAIR, provide a 1-2 sentence corrected version of the insight\" \n"
-    "  }\n\n"
     "Be precise and skeptical. Your decision ensures grounding integrity."
 )
 
@@ -157,11 +137,13 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     # Periodic consolidation (lite)
     memory_generator_lite = Agent(
         lite_model,
+        result_type=SynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[read_unconsolidated_memories, search_documents, read_document],
     )
     memory_evaluator_lite = Agent(
         lite_model,
+        result_type=EvalResult,
         system_prompt=EVALUATOR_SYSTEM_PROMPT,
         tools=[],
     )
@@ -169,6 +151,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     # Deep/Dream consolidation (smart)
     memory_generator_smart = Agent(
         smart_model,
+        result_type=SynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[
             read_all_memories, search_documents, read_document
@@ -176,6 +159,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
     )
     memory_evaluator_smart = Agent(
         smart_model,
+        result_type=EvalResult,
         system_prompt=EVALUATOR_SYSTEM_PROMPT,
         tools=[],
     )
@@ -197,6 +181,7 @@ def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Age
 
     sync_agent = Agent(
         lite_model,
+        result_type=AuditResult,
         system_prompt=SYNC_AUDITOR_SYSTEM_PROMPT,
         tools=[], # Only analysis
     )

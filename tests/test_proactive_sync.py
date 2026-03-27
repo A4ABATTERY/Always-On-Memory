@@ -15,6 +15,7 @@ from agent import MemoryAgent
 from librarian import index_all_dirs
 from memory_store import store_memory, update_link_status, db_session
 from database import init_db
+from models import AuditResult
 
 class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
     
@@ -78,9 +79,8 @@ class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
         
         # 5. Simulate Sync Worker Audit
         # Mock sync_agent response to evolve the link
-        self.agent.sync_agent.run.return_value = MagicMock(
-            output=json.dumps({"status": "HISTORICAL", "reason": "Logic has changed significantly"})
-        )
+        data = AuditResult(status="HISTORICAL", reason="Logic has changed significantly")
+        self.agent.sync_agent.run.return_value = MagicMock(data=data)
         
         # Create a mock doc for read_document if needed or just let it read the real file
         with patch('librarian.WATCH_DIRS', str(self.test_dir.resolve())):
@@ -109,13 +109,12 @@ class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
             memory_id = db.execute("SELECT id FROM memories LIMIT 1").fetchone()["id"]
 
         # 2. Simulate REPAIR decision from Sync Agent
-        self.agent.sync_agent.run.return_value = MagicMock(
-            output=json.dumps({
-                "status": "REPAIR", 
-                "reason": "Function name changed",
-                "suggested_update": "The code now has function y."
-            })
+        data = AuditResult(
+            status="REPAIR", 
+            reason="Function name changed",
+            suggested_update="The code now has function y."
         )
+        self.agent.sync_agent.run.return_value = MagicMock(data=data)
         
         # 3. Trigger audit
         with patch('librarian.WATCH_DIRS', str(self.test_dir.resolve())):

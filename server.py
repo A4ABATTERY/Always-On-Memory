@@ -3,7 +3,7 @@ Server Module — Defines the HTTP API using aiohttp.
 """
 
 from aiohttp import web
-from typing import Any, Dict
+from typing import Any
 
 from memory_store import (
     read_all_memories, get_memory_stats, delete_memory,
