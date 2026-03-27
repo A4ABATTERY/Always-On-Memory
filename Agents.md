@@ -113,4 +113,26 @@ If the memory system becomes unavailable or returns unexpected results, follow t
 
 ### Performance Degradation
 - **Check DB Size**: If `memory.db` exceeds 1GB, manually trigger `/reconsolidate` to force an adversarial audit and pruning cycle.
-- **TurboQuant 3.5-bit Status**: Ensure `sqlite-vec` is correctly loaded and the rotation matrix is initialized (Check `/status`).
+---
+
+## 7. API Reference
+
+All agents should interact with the system via these REST endpoints.
+
+| Endpoint | Method | Description | Payload / Params |
+|---|---|---|---|
+| `/query` | GET | Semantic query + synthesized answer | `?q=your+question` |
+| `/search` | GET | Direct vector search over code files | `?q=code+query&k=5` |
+| `/ingest` | POST | Feed new info into memory | `{"text": "...", "source": "..."}` |
+| `/status` | GET | System health & link metrics | (None) |
+| `/memories` | GET | List all stored MemCubes | (None) |
+| `/links` | GET | List all structural code-memory links | (None) |
+| `/delete` | POST | Permanently remove a MemCube | `{"memory_id": 1}` |
+| `/export_cubes` | GET | Export MemCubes as portable JSON | `?ids=1,2,3` (optional) |
+| `/import_cubes` | POST | Port memory between environments | `[{"memory_id": ...}, ...]` |
+| `/consolidate` | POST | Trigger adversarial consolidation | (None) |
+| `/reconsolidate` | POST | Trigger deep 24h quality audit | (None) |
+| `/improve` | POST | Trigger autonomous skill evolution | (None) |
+
+> [!TIP]
+> Use `/status` frequently to monitor **Grounding Integrity** (active vs. historical links) and ensure your agent is working with the most up-to-date architectural context.
