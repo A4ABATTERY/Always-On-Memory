@@ -3,13 +3,13 @@ Configuration Module — Handles site-wide settings and environment variables.
 """
 
 import asyncio
+import importlib.util
 import os
 from pathlib import Path
 
 # Global shutdown coordination
 _shutdown_event: asyncio.Event = asyncio.Event()
 
-import importlib.util
 HAS_SQLITE_VEC: bool = importlib.util.find_spec("sqlite_vec") is not None
 
 def _load_dotenv() -> None:
