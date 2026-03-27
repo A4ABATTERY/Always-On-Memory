@@ -14,7 +14,7 @@ from typing import List, Dict, Any
 from config import (
     WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS, 
     HAS_SQLITE_VEC, SKILLS_DIR, DEBOUNCE_INTERVAL, SCAN_INTERVAL,
-    _shutdown_event
+    _shutdown_event, INBOX_DIR
 )
 from database import db_session
 from utils import is_binary_file, embed_text, serialize_int8, chunk_text
@@ -61,7 +61,7 @@ def read_document(path: str) -> Dict[str, Any]:
     
     # Security: check if path is within allowed directories
     # Note: This list should be updated based on actual WATCH_DIRS
-    allowed_dirs = [Path("inbox").resolve(), Path(SKILLS_DIR).expanduser().resolve()]
+    allowed_dirs = [Path(INBOX_DIR).resolve(), Path(SKILLS_DIR).expanduser().resolve()]
     if WATCH_DIRS:
         allowed_dirs.extend([Path(d.strip()).expanduser().resolve() for d in WATCH_DIRS.split(",") if d.strip()])
     

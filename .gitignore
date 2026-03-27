@@ -7,7 +7,6 @@
 # Inbox and temporary files
 inbox/
 agent.log
-tests/*
 local/
 .agents/
 .agent/

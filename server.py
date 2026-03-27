@@ -11,10 +11,11 @@ from memory_store import (
 )
 
 from librarian import search_documents
+from config import INBOX_DIR
 
 # Note: MemoryAgent and clear_all_memories will be passed or imported correctly.
 
-def build_http(agent: Any, watch_path: str = "./inbox") -> web.Application:
+def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
     """Build the aiohttp application with all routes."""
     app = web.Application()
 

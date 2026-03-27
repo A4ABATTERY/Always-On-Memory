@@ -43,6 +43,7 @@ DB_PATH: str = get_db_path() # Keep for backward compatibility, but get_db_path(
 RATE_LIMIT: int = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS: str = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip
+INBOX_DIR: str = os.getenv("INBOX_DIR", "inbox")
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2-preview")
 SKILLS_DIR: str = os.getenv("SKILLS_DIR", ".agents/skills")
 DEBOUNCE_INTERVAL: int = int(os.getenv("DEBOUNCE_INTERVAL", "10"))  # seconds to wait after last change before indexing

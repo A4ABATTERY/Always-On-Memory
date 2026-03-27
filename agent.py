@@ -19,7 +19,7 @@ from config import (
     SMART_MODEL,
     TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
     _shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
-    HAS_SQLITE_VEC
+    HAS_SQLITE_VEC, INBOX_DIR
 )
 from database import init_db, db_session
 from agents_factory import build_agents
@@ -603,7 +603,7 @@ async def main_async(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Agent Memory Layer v2 - PydanticAI")
-    parser.add_argument("--watch", default="./inbox", help="Folder to watch")
+    parser.add_argument("--watch", default=INBOX_DIR, help="Folder to watch")
     parser.add_argument("--port", type=int, default=8888, help="API port")
     parser.add_argument("--consolidate-every", type=int, default=30, help="Interval in minutes")
     args = parser.parse_args()
