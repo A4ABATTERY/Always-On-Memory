@@ -53,7 +53,23 @@ curl -s "http://localhost:8888/search?q=JWT+token+validation+logic&k=3"
 
 ---
 
-## 4. MemCube Portability (Export/Import)
+## 4. Structural Linkage (V3.1+)
+
+Always-On-Memory v3 now performs **Structural Linkage** during consolidation cycles. This explicitly maps high-level architectural decisions to concrete file paths.
+
+### Advantages
+- **L1 Cache Retrieval**: If a memory has a `file_link`, the Query Agent retrieves that file directly, bypassing the expensive vector search.
+- **Context Grounding**: The agent "understands" that a specific MemCube is the implementation of a specific file.
+
+### How to Leverage
+You do not need to do anything manually. The consolidation agents use `search_documents` during their "dream" phase to build these links. However, you can query for these links:
+```bash
+curl -s "http://localhost:8888/query?q=Which+files+are+linked+to+the+consolidation+logic?"
+```
+
+---
+
+## 5. MemCube Portability (Export/Import)
 
 Always-On-Memory v3 treats memory as computational state that can be migrated between environments (e.g., from local dev to CI/staging).
 
@@ -97,4 +113,26 @@ If the memory system becomes unavailable or returns unexpected results, follow t
 
 ### Performance Degradation
 - **Check DB Size**: If `memory.db` exceeds 1GB, manually trigger `/reconsolidate` to force an adversarial audit and pruning cycle.
-- **TurboQuant 3.5-bit Status**: Ensure `sqlite-vec` is correctly loaded and the rotation matrix is initialized (Check `/status`).
+---
+
+## 7. API Reference
+
+All agents should interact with the system via these REST endpoints.
+
+| Endpoint | Method | Description | Payload / Params |
+|---|---|---|---|
+| `/query` | GET | Semantic query + synthesized answer | `?q=your+question` |
+| `/search` | GET | Direct vector search over code files | `?q=code+query&k=5` |
+| `/ingest` | POST | Feed new info into memory | `{"text": "...", "source": "..."}` |
+| `/status` | GET | System health & link metrics | (None) |
+| `/memories` | GET | List all stored MemCubes | (None) |
+| `/links` | GET | List all structural code-memory links | (None) |
+| `/delete` | POST | Permanently remove a MemCube | `{"memory_id": 1}` |
+| `/export_cubes` | GET | Export MemCubes as portable JSON | `?ids=1,2,3` (optional) |
+| `/import_cubes` | POST | Port memory between environments | `[{"memory_id": ...}, ...]` |
+| `/consolidate` | POST | Trigger adversarial consolidation | (None) |
+| `/reconsolidate` | POST | Trigger deep 24h quality audit | (None) |
+| `/improve` | POST | Trigger autonomous skill evolution | (None) |
+
+> [!TIP]
+> Use `/status` frequently to monitor **Grounding Integrity** (active vs. historical links) and ensure your agent is working with the most up-to-date architectural context.

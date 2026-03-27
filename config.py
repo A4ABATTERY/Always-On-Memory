@@ -3,17 +3,14 @@ Configuration Module — Handles site-wide settings and environment variables.
 """
 
 import asyncio
+import importlib.util
 import os
 from pathlib import Path
 
 # Global shutdown coordination
 _shutdown_event: asyncio.Event = asyncio.Event()
 
-try:
-    import sqlite_vec
-    HAS_SQLITE_VEC: bool = True
-except ImportError:
-    HAS_SQLITE_VEC: bool = False
+HAS_SQLITE_VEC: bool = importlib.util.find_spec("sqlite_vec") is not None
 
 def _load_dotenv() -> None:
     """Load .env file from the script's directory (no external dependency)."""
@@ -48,13 +45,15 @@ WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS: str = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2-preview")
 SKILLS_DIR: str = os.getenv("SKILLS_DIR", ".agents/skills")
-DEBOUNCE_INTERVAL: int = int(os.getenv("DEBOUNCE_INTERVAL", "60"))  # seconds to wait after last change before indexing
+DEBOUNCE_INTERVAL: int = int(os.getenv("DEBOUNCE_INTERVAL", "10"))  # seconds to wait after last change before indexing
 SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "5"))          # seconds between checking for modifications
 
 # AutoDream configuration
 IDLE_THRESHOLD_MINUTES: int = int(os.getenv("IDLE_THRESHOLD_MINUTES", "30"))
 AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300"))  # 5 min
 CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
+DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
+
 
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS: set[str] = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}

@@ -18,6 +18,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Adversarial Consolidation** | Multi-agent (Generator-Evaluator) harness for high-fidelity memory synthesis |
 | **AutoDream Cycles** | Idle-time "sleep" phase that prunes, reorganizes, and clusters MemCubes |
 | **TurboQuant 3.5-bit** | Random orthogonal rotations + scalar quantization (3.5-bit precision) for high-fidelity vector compression |
+| **Structural Linkage** | Proactive background auditing and autonomous "Self-Healing" of code-memory connections (V3.3) |
 | **Memory Ingestion** | Multimodal ingestion (text, images, audio, video) via Inbox or HTTP |
 | **Librarian Mode** | High-performance semantic code search with debounced indexing |
 | **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
@@ -49,12 +50,26 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │  └─────────────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                          │
 │  Active Cycles:                                                                          │
-│  • Inbox Watcher (5s)        • AutoDream (When Idle > 30m)                               │
-│  • Consolidation (30m)       • Librarian Indexer (Debounced 60s)                         │
+│  • Inbox Watcher (5s)        • AutoDream (Idle > 30m)    • Proactive Sync (Drift Det.)   │
+│  • Consolidation (30m)       • Librarian Indexer (60s)   • Self-Healing Audit (V3.3)     │
 │  • Deep Re-Consolidation (24h)                                                           │
 │  • Self-Improvement Audit (24h)                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Features (V3.3 Upgrade)
+
+### 🧠 Structural Memory Linkage
+V3.3 introduces a proactive **Self-Healing** layer for code-memory grounding. The system no longer just links memories to files; it actively audits them:
+
+1. **Drift Detection**: When the Librarian indexes code, it calculates the vector distance between a file's content and its linked MemCubes.
+2. **Proactive Sync**: If distance exceeds `DRIFT_THRESHOLD` (0.18), the cube is sent to the **Sync Auditor** agent.
+3. **Link Evolution**:
+    - **ACTIVE**: Grounding is still valid.
+    - **HISTORICAL**: Code has diverged completely (Link preserved as historical trace).
+    - **REPAIR**: Code has changed but the intent remains. The agent **autonomously updates** the memory's technical description to stay grounded.
+
+4. **Monitoring**: Track grounding integrity via the `/status` and `/links` endpoints.
 
 ## Quick Start
 
@@ -150,6 +165,7 @@ PYTHONPATH=. ./.venv/bin/python -m unittest discover tests
 | `/search?q=...` | GET | Direct semantic search over files (snippets + paths) |
 | `/export_cubes` | GET | Export MemCubes as portable JSON `?ids=1,2,3` |
 | `/import_cubes` | POST | Import portable MemCube JSON `{"cubes": [...]}` |
+| `/links` | GET | List structural links + grounding integrity (V3.3) |
 | `/consolidate` | POST | Trigger manual adversarial consolidation |
 | `/reconsolidate` | POST | Trigger deep re-consolidation (Pro model) |
 | `/improve` | POST | Trigger manual self-improvement audit |

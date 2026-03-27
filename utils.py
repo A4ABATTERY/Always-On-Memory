@@ -3,19 +3,15 @@ Utils Module — Common helper functions for embeddings, retries, and file proce
 """
 
 import asyncio
-import hashlib
 import logging
 import struct
-import time
 from pathlib import Path
 from typing import List, Optional, Any, Callable
 
-import numpy as np
 from turboquant import get_turboquant
 
 from config import (
-    BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL,
-    _shutdown_event  # This will be tricky if _shutdown_event is in main
+    BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL  # This will be tricky if _shutdown_event is in main
 )
 
 # We might need to move _shutdown_event to a shared place or pass it

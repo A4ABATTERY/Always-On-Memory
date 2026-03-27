@@ -5,8 +5,7 @@ Database Module — Manages SQLite connections and schema initialization.
 import contextlib
 import logging
 import sqlite3
-import os
-from typing import Generator, Any
+from typing import Generator
 
 try:
     import sqlite_vec

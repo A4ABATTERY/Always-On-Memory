@@ -6,11 +6,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from config import (
     WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS, 
@@ -18,7 +17,7 @@ from config import (
     _shutdown_event
 )
 from database import db_session
-from utils import is_binary_file, embed_text, serialize_f32, serialize_int8, chunk_text
+from utils import is_binary_file, embed_text, serialize_int8, chunk_text
 
 log = logging.getLogger("memory-agent.librarian")
 
@@ -136,7 +135,67 @@ def _get_latest_mtime(dirs: List[str]) -> float:
                 continue
     return latest_mtime
 
-async def index_all_dirs(dirs: List[str]):
+async def _check_semantic_drift(path: str, new_embeddings: List[List[float]], on_drift_detected: Any):
+    """
+    Check if current active memories linked to this path have drifted semantically.
+    """
+    from config import DRIFT_THRESHOLD
+    import numpy as np
+    
+    # Calculate centroid of new embeddings
+    centroid = np.mean(new_embeddings, axis=0)
+    
+    # TurboQuant: apply the same rotation to the centroid
+    from turboquant import get_turboquant
+    tq = get_turboquant(dim=len(centroid))
+    # transform() handles normalization and rotation
+    rotated_centroid = tq.transform(centroid)
+
+    with db_session() as db:
+
+        # Find memories with an active file_link to this path
+        # SQLite JSON path search: connections is a list of objects
+        rows = db.execute(
+            """
+            SELECT m.id, vec_to_json(v.embedding) as vector, m.connections 
+            FROM memories m
+            JOIN vec_memories v ON m.id = v.memory_id
+            WHERE m.connections LIKE ?
+            """,
+            (f'%"{path}"%',) # Rough filter, refined below
+        ).fetchall()
+
+    for r in rows:
+        connections = json.loads(r["connections"])
+        is_active_link = any(
+            c.get("type") == "file_link" and 
+            c.get("path") == path and 
+            c.get("status", "active") == "active"
+            for c in connections
+        )
+        
+        if not is_active_link:
+            continue
+
+        memory_id = r["id"]
+        memory_vector = json.loads(r["vector"])
+        memory_emb = np.array(memory_vector)
+        m_norm = np.linalg.norm(memory_emb)
+        if m_norm > 1e-9:
+            memory_emb = memory_emb / m_norm
+            
+        # Cosine distance = 1 - cosine similarity
+        distance = 1.0 - np.dot(rotated_centroid, memory_emb)
+
+        
+        if distance > DRIFT_THRESHOLD:
+            log.info(f"🚨 Drift detected for memory #{memory_id} on '{path}' (dist: {distance:.3f} > {DRIFT_THRESHOLD})")
+            if asyncio.iscoroutinefunction(on_drift_detected):
+                await on_drift_detected(path, memory_id)
+            else:
+                on_drift_detected(path, memory_id)
+
+async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
     """Walk directories and index files."""
     indexed = 0
     skipped = 0
@@ -185,12 +244,15 @@ async def index_all_dirs(dirs: List[str]):
             chunks = chunk_text(text, max_chars=1500)
             log.info(f"📚 Indexing '{f.name}': {len(chunks)} chunks...")
             now = datetime.now(timezone.utc).isoformat()
-
+            
+            chunks_embeddings = []
             for i, chunk in enumerate(chunks):
                 if _shutdown_event.is_set():
                     break
 
                 embedding = await embed_text(chunk, shutdown_event=_shutdown_event)
+                if embedding:
+                    chunks_embeddings.append(embedding)
                 
                 with db_session() as db: 
                     cursor = db.execute(
@@ -201,6 +263,7 @@ async def index_all_dirs(dirs: List[str]):
                     
                     if embedding:
                         try:
+                            # Note: sqlite-vec int8 expects 3072 dims by default in database.py
                             db.execute(
                                 "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_int8(?))",
                                 (doc_id, serialize_int8(embedding)),
@@ -210,11 +273,15 @@ async def index_all_dirs(dirs: List[str]):
                     db.commit()
 
             indexed += 1
+            
+            # Semantic Drift Detection (V3.3)
+            if on_drift_detected and chunks_embeddings:
+                await _check_semantic_drift(str(f), chunks_embeddings, on_drift_detected)
 
     if indexed > 0 or skipped > 0:
         log.info(f"📚 Indexing complete: {indexed} files indexed, {skipped} unchanged")
 
-async def librarian_loop():
+async def librarian_loop(on_drift_detected: Any = None):
     """Periodically index documents."""
     log.info("📚 Librarian loop started.")
     if not WATCH_DIRS:
@@ -249,7 +316,7 @@ async def librarian_loop():
                 elapsed = time.time() - last_change_time
                 if elapsed >= DEBOUNCE_INTERVAL:
                     log.info(f"📚 Librarian: debounce window ({DEBOUNCE_INTERVAL}s) closed. Synchronizing vector index...")
-                    await index_all_dirs(dirs)
+                    await index_all_dirs(dirs, on_drift_detected=on_drift_detected)
                     
                     with db_session() as db:
                         row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()

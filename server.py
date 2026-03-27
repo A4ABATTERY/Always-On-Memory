@@ -3,12 +3,13 @@ Server Module — Defines the HTTP API using aiohttp.
 """
 
 from aiohttp import web
-from typing import Any, Dict
+from typing import Any
 
 from memory_store import (
     read_all_memories, get_memory_stats, delete_memory,
-    # clear_all_memories is not yet moved
+    get_all_links
 )
+
 from librarian import search_documents
 
 # Note: MemoryAgent and clear_all_memories will be passed or imported correctly.
@@ -110,6 +111,11 @@ def build_http(agent: Any, watch_path: str = "./inbox") -> web.Application:
         result = await import_cubes(cubes)
         return web.json_response(result)
 
+    async def handle_links(request: web.Request) -> web.Response:
+        """List all code-memory structural links."""
+        result = get_all_links()
+        return web.json_response(result)
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -122,5 +128,6 @@ def build_http(agent: Any, watch_path: str = "./inbox") -> web.Application:
     app.router.add_get("/search", handle_search)
     app.router.add_get("/export_cubes", handle_export_cubes)
     app.router.add_post("/import_cubes", handle_import_cubes)
+    app.router.add_get("/links", handle_links)
 
     return app

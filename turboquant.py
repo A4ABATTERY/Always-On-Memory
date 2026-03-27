@@ -4,7 +4,7 @@ Implements the core logic from the TurboQuant paper (3.5-bit simulation).
 """
 
 import numpy as np
-from typing import Dict, List, Optional
+from typing import List
 
 class TurboQuant:
     """
