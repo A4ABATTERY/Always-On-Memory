@@ -168,10 +168,10 @@ def read_unconsolidated_with_embeddings(limit: int = 100) -> List[Dict[str, Any]
 
     with db_session() as db:
         # Join memories with vec_memories to get the embeddings
-        # We use vec_to_f32 to convert the int8 quantized vector back to float list
+        # We use vec_to_json to convert the int8 quantized vector back to a JSON array of floats
         rows = db.execute(
             """
-            SELECT m.*, vec_to_f32(v.embedding) as vector 
+            SELECT m.*, vec_to_json(v.embedding) as vector 
             FROM memories m
             JOIN vec_memories v ON m.id = v.memory_id
             WHERE m.consolidated = 0

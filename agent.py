@@ -91,7 +91,7 @@ class MemoryAgent:
         result = await retry_with_backoff(self.ingest_agent.run, msg, shutdown_event=_shutdown_event)
         
         usage = result.usage()
-        log.info(f"📥 Ingested: {usage.total_tokens} tokens | {usage.request_tokens} req | {usage.response_tokens} res")
+        log.info(f"📥 Ingested: {usage.total_tokens} tokens | {usage.input_tokens} req | {usage.output_tokens} res")
         return result.output
 
     async def adversarial_consolidation(
