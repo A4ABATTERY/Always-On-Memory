@@ -249,6 +249,17 @@ The project has been refactored into focused, type-safe modules:
 - [sqlite-vec](https://github.com/asg017/sqlite-vec) — Vector search extension for SQLite
 - [aiohttp](https://docs.aiohttp.org/) — Async HTTP server
 
+## Research & Inspiration
+
+This project integrates several cutting-edge concepts from the AI research community:
+
+- **Always-On-Memory (MemOS)**: Inspired by the [MemTensor](https://github.com/MemTensor/MemOS) team's work on the first memory operating system for LLM agents (Stardust v2.0).
+- **Adversarial Consolidation**: Based on [Anthropic's harness design](https://www.anthropic.com/engineering/harness-design-long-running-apps) for long-running application development.
+- **AutoDream**: Derived from [Anthropic's](https://claudefa.st/blog/autodream-memory-consolidation) experimental background memory consolidation feature for Claude Code.
+- **TurboQuant**: Implements principles from [Google's TurboQuant](https://www.marktechpost.com/2026/03/25/google-introduces-turboquant-a-new-compression-algorithm-that-reduces-llm-key-value-cache-memory-by-6x-and-delivers-up-to-8x-speedup-all-with-zero-accuracy-loss/) for high-fidelity, low-memory vector search.
+
+For detailed instructions on how to integrate your own agents with this memory layer, see the [Agent Memory Integration Guide](file:///home/arbi/Always-On-Memory/Agents.md).
+
 ## Credits
 
 This project was derived from the [Google Cloud Platform Always-On-Memory Agent](https://github.com/GoogleCloudPlatform/generative-ai/tree/main/gemini/agents/always-on-memory-agent) and has been expanded with PydanticAI, Librarian mode (vector search), and rate-limiting resilience.
