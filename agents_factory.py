@@ -25,8 +25,8 @@ def make_model(model_str: str):
         return ConcurrencyLimitedModel(model_str, limiter=RATE_LIMIT)
     return model_str
 
-lite_model = make_model(MODEL)
-smart_model = make_model(SMART_MODEL)
+# Models are constructed inside build_agents() so that importing this module
+# never requires a live API key — model resolution is deferred until runtime.
 
 # ─── System Prompts ───────────────────────────────────────────
 
@@ -127,6 +127,9 @@ SYNC_AUDITOR_SYSTEM_PROMPT = (
 def build_agents() -> Tuple[Agent, Agent, Agent, Agent, Agent, Agent, Agent, Agent]:
     """Build PydanticAI agents."""
     from librarian import search_documents, read_document, write_skill_file
+
+    lite_model = make_model(MODEL)
+    smart_model = make_model(SMART_MODEL)
 
     ingest_agent = Agent(
         lite_model,

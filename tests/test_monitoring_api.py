@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
@@ -15,24 +16,30 @@ from server import build_http
 from database import init_db, db_session
 from memory_store import store_memory
 
+_DUMMY_VECTOR = [0.01] * 3072
+
 class TestMonitoringAPI(AioHTTPTestCase):
-    
+
     async def get_application(self):
         self.db_path = "test_api_monitoring.db"
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.environ["MEMORY_DB"] = self.db_path
         init_db()
-        
+
+        self.embed_patcher = patch("utils.embed_text", AsyncMock(return_value=_DUMMY_VECTOR))
+        self.embed_patcher.start()
+
         self.agent = MagicMock()
-        # Mocking async methods
         self.agent.query = AsyncMock(return_value="Answer")
         self.agent.ingest = AsyncMock(return_value="Ingested")
-        
+
         return build_http(self.agent)
 
     def tearDown(self):
         super().tearDown()
+        if hasattr(self, "embed_patcher"):
+            self.embed_patcher.stop()
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
 

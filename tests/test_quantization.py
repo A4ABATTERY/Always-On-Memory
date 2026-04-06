@@ -10,31 +10,32 @@ from turboquant import get_turboquant
 class TestQuantization(unittest.TestCase):
     
     def test_quantization_mse(self):
-        """Benchmark MSE between original and int8 quantized embeddings."""
-        # Generate random normalized float32 vector (simulating embedding)
-        dim = 1024
+        """Benchmark MSE between original and int8 quantized embeddings.
+
+        Uses dim=3072 to match the production vec_memories / vec_documents schema.
+        A 1024-dim quantized vector (1024 bytes) cannot be inserted into the
+        int8[3072] column, so the test must use the production dimension.
+        """
+        dim = 3072  # Must match vec0 column definition in database.py
         vec = np.random.randn(dim).astype(np.float32)
         vec /= np.linalg.norm(vec)
-        
-        # Quantize to int8 [-128, 127]
-        # In AOM, we use unit normalization so float [-1, 1] maps to int8 [-127, 127]
-        # Or similar scaling. 
-        # Let's check how utils.serialize_int8 does it (assumed logic).
-        
+
         q_vec_bytes = serialize_int8(vec.tolist())
+
+        # Enforce the byte-length contract: 3072 int8 values = 3072 bytes
+        self.assertEqual(len(q_vec_bytes), dim, f"Expected {dim} bytes, got {len(q_vec_bytes)}")
+
         q_vec = np.frombuffer(q_vec_bytes, dtype=np.int8).astype(np.float32)
-        
-        # Rescale back to float (TurboQuant uses internal scale)
+
         tq = get_turboquant(dim=dim)
         scale = np.sqrt(dim) * 64.0
         reconstructed_rotated = q_vec / scale
-        
-        # Compare with the ROTATED original vector
+
         rotated_vec = tq.transform(vec)
-        
+
         mse = np.mean((rotated_vec - reconstructed_rotated)**2)
-        print(f"\nTurboQuant Rotation MSE: {mse:.8f}")
-        
+        print(f"\nTurboQuant Rotation MSE (dim={dim}): {mse:.8f}")
+
         self.assertLess(mse, 0.001, "Quantization error too high!")
 
     def test_quantization_range(self):

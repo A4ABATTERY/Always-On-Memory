@@ -5,26 +5,31 @@ Edge case tests for Always-On-Memory Agent.
 import os
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 # Global test DB name
 TEST_DB = "test_edges_v3.db"
+_DUMMY_VECTOR = [0.01] * 3072
 
 from database import init_db
 from memory_store import store_memory, get_memory_stats, delete_memory
 
 class TestMemoryEdges(unittest.IsolatedAsyncioTestCase):
-    
+
     @classmethod
     def setUpClass(cls):
         cls.env_patcher = unittest.mock.patch.dict(os.environ, {"MEMORY_DB": TEST_DB})
         cls.env_patcher.start()
-        
+        cls.embed_patcher = patch("utils.embed_text", AsyncMock(return_value=_DUMMY_VECTOR))
+        cls.embed_patcher.start()
+
         if os.path.exists(TEST_DB):
             os.remove(TEST_DB)
         init_db()
 
     @classmethod
     def tearDownClass(cls):
+        cls.embed_patcher.stop()
         if os.path.exists(TEST_DB):
             os.remove(TEST_DB)
         cls.env_patcher.stop()

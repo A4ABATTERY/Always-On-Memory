@@ -15,8 +15,7 @@ class TurboQuant:
         self.dim = dim
         self.seed = seed
         self._rotation_matrix = None
-        self._qjl_matrix = None
-        
+
         # Scalar Quantizer setup (6 levels ≈ 2.5 bits)
         self.levels = 6
         self.bins = np.linspace(-3.0, 3.0, self.levels - 1)
@@ -34,15 +33,6 @@ class TurboQuant:
             self._rotation_matrix = Q.astype(np.float32)
             np.random.set_state(state)
         return self._rotation_matrix
-
-    @property
-    def qjl_matrix(self) -> np.ndarray:
-        if self._qjl_matrix is None:
-            state = np.random.get_state()
-            np.random.seed(self.seed + 1) # Different seed for QJL
-            self._qjl_matrix = np.random.randn(self.dim, self.dim).astype(np.float32)
-            np.random.set_state(state)
-        return self._qjl_matrix
 
     def transform(self, vector: np.ndarray) -> np.ndarray:
         """Applies random orthogonal rotation to the vector."""

@@ -6,9 +6,23 @@ import asyncio
 import importlib.util
 import os
 from pathlib import Path
+from typing import Optional
 
-# Global shutdown coordination
-_shutdown_event: asyncio.Event = asyncio.Event()
+# Global shutdown coordination — lazily created inside the running event loop
+_shutdown_event: Optional[asyncio.Event] = None
+
+def get_shutdown_event() -> asyncio.Event:
+    """Return the process-wide shutdown event, creating it on first call.
+
+    Must be called from within a running asyncio event loop (i.e. inside an
+    async function or after asyncio.new_event_loop() has been set).  This
+    avoids the DeprecationWarning / RuntimeError raised by Python 3.10-3.12
+    when asyncio.Event() is instantiated at module-import time.
+    """
+    global _shutdown_event
+    if _shutdown_event is None:
+        _shutdown_event = asyncio.Event()
+    return _shutdown_event
 
 HAS_SQLITE_VEC: bool = importlib.util.find_spec("sqlite_vec") is not None
 
@@ -39,7 +53,6 @@ def get_db_path() -> str:
 
 MODEL: str = os.getenv("MODEL", "gemini-3.1-flash-lite-preview")
 SMART_MODEL: str = os.getenv("SMART_MODEL", "gemini-3-flash-preview")
-DB_PATH: str = get_db_path() # Keep for backward compatibility, but get_db_path() is preferred
 RATE_LIMIT: int = int(os.getenv("RATE_LIMIT", "15"))
 WATCH_DIRS: str = os.getenv("WATCH_DIRS", "")  # comma-separated folder paths
 IGNORE_DIRS: str = os.getenv("IGNORE_DIRS", "")  # comma-separated extra dirs to skip

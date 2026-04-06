@@ -37,7 +37,7 @@ async def store_memory(
     with db_session() as db:
         now = datetime.now(timezone.utc).isoformat()
         cube = MemCube(
-            cube_id=cube_id or str(uuid4()) if 'uuid4' in globals() else None, # Handled by Field factory
+            cube_id=cube_id or str(uuid4()),
             raw_text=raw_text,
             summary=summary,
             entities=entities,
@@ -51,27 +51,6 @@ async def store_memory(
             metadata=metadata or {},
             created_at=now,
         )
-        
-        # Override cube_id if provided explicitly (MemCube factory is just for defaults)
-        if cube_id:
-            # Re-create to ensure immutability is respected if frozen, 
-            # but actually MemCube uses Field(default_factory=...)
-            # The cleanest way is to pass it to the constructor.
-            cube = MemCube(
-                cube_id=cube_id,
-                raw_text=raw_text,
-                summary=summary,
-                entities=entities,
-                topics=topics,
-                connections=connections or [],
-                importance_score=importance_score,
-                sector=sector,
-                valid_to=valid_to,
-                source=source,
-                origin_platform=origin_platform,
-                metadata=metadata or {},
-                created_at=now,
-            )
         
         cursor = db.execute(
             """INSERT INTO memories (
@@ -297,10 +276,34 @@ def store_consolidation(
             elif conn_type == "file_link":
                 file_path = conn.get("path")
                 if file_path:
-                    # We can't easily 'link' both ways in the documents table, 
-                    # so we store the file link in the consolidated memory's metadata.
-                    # Note: source_ids is defined outside this loop but related to this consolidation.
-                    pass # Handled by the Insight cube creation in agent.py
+                    # Propagate the file_link to every source memory so the
+                    # structural linkage is preserved on the originals, not just
+                    # the consolidated Insight Cube.
+                    link_entry = {
+                        "type": "file_link",
+                        "path": file_path,
+                        "relationship": rel,
+                        "status": "active",
+                    }
+                    for mid in source_ids:
+                        try:
+                            mid_int = int(mid)
+                        except (ValueError, TypeError):
+                            continue
+                        row = db.execute(
+                            "SELECT connections FROM memories WHERE id = ?", (mid_int,)
+                        ).fetchone()
+                        if row:
+                            existing = json.loads(row["connections"])
+                            if not any(
+                                c.get("type") == "file_link" and c.get("path") == file_path
+                                for c in existing
+                            ):
+                                existing.append(link_entry)
+                                db.execute(
+                                    "UPDATE memories SET connections = ? WHERE id = ?",
+                                    (json.dumps(existing), mid_int),
+                                )
         
         # Robust flattening and int-casting for source_ids (LLMs keep returning nested lists)
         flattened_ids = []

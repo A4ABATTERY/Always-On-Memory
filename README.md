@@ -17,7 +17,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **MemCubes** | Standardized, portable memory units for cross-platform migration |
 | **Adversarial Consolidation** | Multi-agent (Generator-Evaluator) harness for high-fidelity memory synthesis |
 | **AutoDream Cycles** | Idle-time "sleep" phase that prunes, reorganizes, and clusters MemCubes |
-| **TurboQuant 3.5-bit** | Random orthogonal rotations + scalar quantization (3.5-bit precision) for high-fidelity vector compression |
+| **TurboQuant-inspired int8** | Random orthogonal rotations + int8 scalar quantization (~75% storage reduction) for high-fidelity vector compression |
 | **Structural Linkage** | Proactive background auditing and autonomous "Self-Healing" of code-memory connections (V3.3) |
 | **Memory Ingestion** | Multimodal ingestion (text, images, audio, video) via Inbox or HTTP |
 | **Librarian Mode** | High-performance semantic code search with debounced indexing |
@@ -272,7 +272,7 @@ This project integrates several cutting-edge concepts from the AI research commu
 - **Always-On-Memory (MemOS)**: Inspired by the [MemTensor](https://github.com/MemTensor/MemOS) team's work on the first memory operating system for LLM agents (Stardust v2.0).
 - **Adversarial Consolidation**: Based on [Anthropic's harness design](https://www.anthropic.com/engineering/harness-design-long-running-apps) for long-running application development.
 - **AutoDream**: Derived from [Anthropic's](https://claudefa.st/blog/guide/mechanics/auto-dream) experimental background memory consolidation feature for Claude Code.
-- **TurboQuant**: Implements principles from [Google's TurboQuant](https://www.marktechpost.com/2026/03/25/google-introduces-turboquant-a-new-compression-algorithm-that-reduces-llm-key-value-cache-memory-by-6x-and-delivers-up-to-8x-speedup-all-with-zero-accuracy-loss/) for high-fidelity, low-memory vector search.
+- **TurboQuant**: Inspired by [Google's TurboQuant](https://www.marktechpost.com/2026/03/25/google-introduces-turboquant-a-new-compression-algorithm-that-reduces-llm-key-value-cache-memory-by-6x-and-delivers-up-to-8x-speedup-all-with-zero-accuracy-loss/) — applies a seeded random orthogonal rotation before int8 scalar quantization, achieving ~75% storage reduction (float32 → int8) while preserving cosine similarity.
 
 For detailed instructions on how to integrate your own agents with this memory layer, see the [Agent Memory Integration Guide](file:///home/arbi/Always-On-Memory/Agents.md).
 

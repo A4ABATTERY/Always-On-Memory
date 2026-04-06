@@ -18,9 +18,13 @@ from aiohttp import web
 from config import (
     SMART_MODEL,
     TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
-    _shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
+    get_shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
     HAS_SQLITE_VEC, INBOX_DIR
 )
+
+# Module-level reference — set to the real event at the start of main_async()
+# so it is always created inside the running event loop (fixes Python 3.12 RuntimeError).
+_shutdown_event = None
 from database import init_db, db_session
 from agents_factory import build_agents
 from utils import retry_with_backoff
@@ -106,7 +110,7 @@ class MemoryAgent:
             shutdown_event=_shutdown_event
         )
         
-        data: AuditResult = result.data
+        data: AuditResult = result.output
         status = data.status.upper()
         reason = data.reason
         suggested = data.suggested_update
@@ -174,10 +178,39 @@ class MemoryAgent:
         record_activity()
         log.info(f"📥 Analyzing {'file: ' + source if source else 'text content'} ({len(text)} chars)...")
         msg = f"Remember this information (source: {source}):\n\n{text}" if source else f"Remember this information:\n\n{text}"
+
+        # Record timestamp before agent call so we can verify persistence afterward.
+        from datetime import datetime, timezone
+        before_ts = datetime.now(timezone.utc).isoformat()
+
         result = await retry_with_backoff(self.ingest_agent.run, msg, shutdown_event=_shutdown_event)
-        
+
         usage = result.usage()
         log.info(f"📥 Ingested: {usage.total_tokens} tokens | {usage.input_tokens} req | {usage.output_tokens} res")
+
+        # Reflexive-loop guard: verify the agent actually called store_memory.
+        # If no new memory was written, fall back to direct persistence.
+        from memory_store import store_memory as _store_memory
+        with db_session() as db:
+            new_row = db.execute(
+                "SELECT id FROM memories WHERE created_at >= ? LIMIT 1", (before_ts,)
+            ).fetchone()
+
+        if not new_row:
+            log.warning(
+                "⚠️ Ingest agent did not call store_memory — falling back to direct persistence."
+            )
+            fallback = await _store_memory(
+                raw_text=text,
+                summary=f"Auto-ingested from {source}" if source else "Auto-ingested content",
+                entities=[],
+                topics=[],
+                importance_score=0.5,
+                sector="episodic",
+                source=source or "ingest-fallback",
+            )
+            return f"Stored via fallback as MemCube #{fallback['memory_id']}"
+
         return result.output
 
     async def adversarial_consolidation(
@@ -201,7 +234,7 @@ class MemoryAgent:
                 f"Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
                 shutdown_event=_shutdown_event,
             )
-            draft_data: SynthesisResult = gen_result.data
+            draft_data: SynthesisResult = gen_result.output
             
             # Step 2: Evaluator grades it (Structured Result)
             eval_result = await retry_with_backoff(
@@ -211,7 +244,7 @@ class MemoryAgent:
                 shutdown_event=_shutdown_event,
             )
             
-            eval_data: EvalResult = eval_result.data
+            eval_data: EvalResult = eval_result.output
             score = eval_data.score
             feedback = eval_data.feedback
             
@@ -278,7 +311,7 @@ class MemoryAgent:
         
         output = result.output
         memory_refs = output.count("[Memory")
-        file_refs = output.count("/home/") or output.count("./") or output.count("Relevant Files")
+        file_refs = output.count("/home/") + output.count("./") + output.count("Relevant Files")
         
         usage = result.usage()
         log.info(f"🔍 Answered: {usage.total_tokens} tokens | {memory_refs} refs | {file_refs} files")
@@ -432,30 +465,50 @@ async def _dream_decay():
 
 async def _dream_reorganize(agent: MemoryAgent):
     """Cluster related memories using embeddings and trigger adversarial consolidation for large clusters."""
-    from memory_store import read_unconsolidated_with_embeddings, cluster_memories_by_embedding
-    
-    # Fetch memories with embeddings
-    memories = read_unconsolidated_with_embeddings(limit=100)
+    from memory_store import (
+        read_unconsolidated_with_embeddings, cluster_memories_by_embedding,
+        store_consolidation, store_memory,
+    )
+
+    # Limit matches standard consolidate() to avoid over-aggressive idle reorganization.
+    memories = read_unconsolidated_with_embeddings(limit=30)
     if len(memories) < 3:
         log.debug(f"💤 Dream: Not enough memories for clustering ({len(memories)}/3)")
         return
 
     # Use embedding-based clustering
     clusters = cluster_memories_by_embedding(memories, threshold=0.75)
-    
+
     import json
     for cluster_name, cluster_members in clusters.items():
         if len(cluster_members) >= 3:
             log.info(f"💤 Dream: compressing {cluster_name} ({len(cluster_members)} memories)")
             cluster_text = json.dumps(cluster_members, indent=2)
             try:
-                # Use smart agents for Dream consolidation
-                await agent.adversarial_consolidation(
-                    agent.generator_smart, 
-                    agent.evaluator_smart, 
+                result_data = await agent.adversarial_consolidation(
+                    agent.generator_smart,
+                    agent.evaluator_smart,
                     cluster_text,
-                    quality_threshold=0.9 # Higher quality for dream
+                    quality_threshold=0.9,
                 )
+                # Persist: mark sources consolidated and write the Insight Cube.
+                store_consolidation(
+                    source_ids=result_data["source_ids"],
+                    summary=result_data["summary"],
+                    insight=result_data["insight"],
+                    connections=result_data.get("connections", []),
+                )
+                new_cube = await store_memory(
+                    raw_text=result_data["insight"],
+                    summary=result_data["summary"],
+                    entities=[],
+                    topics=["dream-insight"],
+                    connections=result_data.get("connections", []),
+                    importance_score=0.85,
+                    sector="semantic",
+                    source="autodream-consolidation",
+                )
+                log.info(f"💤 Dream: created Insight Cube #{new_cube['memory_id']} from {cluster_name}")
             except Exception as e:
                 log.debug(f"Dream cluster consolidation failed: {e}")
 
@@ -569,6 +622,9 @@ async def deep_reconsolidate_loop(agent: MemoryAgent, interval_hours: int = 24):
 # ─── Main ──────────────────────────────────────────────────────
 
 async def main_async(args):
+    global _shutdown_event
+    _shutdown_event = get_shutdown_event()
+
     init_db()
     agent = MemoryAgent()
 
