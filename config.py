@@ -68,6 +68,14 @@ AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300")
 CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
 DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
 
+# MCP Server
+MCP_PORT: int = int(os.getenv("MCP_PORT", "8765"))
+MCP_HOST: str = os.getenv("MCP_HOST", "0.0.0.0")
+AOM_API_KEYS: str = os.getenv("AOM_API_KEYS", "")  # format: "name1:key1,name2:key2"
+# Set AOM_MCP_NO_AUTH=true ONLY for localhost-only deployments where auth is unnecessary.
+# If unset (default), starting the MCP server without AOM_API_KEYS raises RuntimeError.
+AOM_MCP_NO_AUTH: str = os.getenv("AOM_MCP_NO_AUTH", "")
+
 
 # Supported file types for multimodal ingestion (inbox watcher)
 TEXT_EXTENSIONS: set[str] = {".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml"}
