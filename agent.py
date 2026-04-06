@@ -12,6 +12,7 @@ import signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional, cast
 
 from pydantic_ai import Agent
 from aiohttp import web
@@ -21,10 +22,10 @@ from config import (
     get_shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
     HAS_SQLITE_VEC, INBOX_DIR
 )
+from models import SynthesisResult, AuditResult, EvalResult
 
 # Module-level reference — set to the real event at the start of main_async()
-# so it is always created inside the running event loop (fixes Python 3.12 RuntimeError).
-_shutdown_event = None
+_shutdown_event: Optional[asyncio.Event] = None
 from database import init_db, db_session
 from agents_factory import build_agents
 from utils import retry_with_backoff
@@ -35,9 +36,10 @@ from librarian import librarian_loop
 from server import build_http
 
 try:
-    from google import genai
+    import google.genai as genai
     HAS_GENAI = True
 except ImportError:
+    genai = cast(Any, None)
     HAS_GENAI = False
 
 logging.basicConfig(
@@ -71,6 +73,15 @@ class MemoryAgent:
             self.self_improvement_agent,
             self.sync_agent,
         ) = build_agents()
+        
+        self.ingest_agent: Agent[None, str] = self.ingest_agent
+        self.generator_lite: Agent[None, SynthesisResult] = self.generator_lite
+        self.evaluator_lite: Agent[None, EvalResult] = self.evaluator_lite
+        self.generator_smart: Agent[None, SynthesisResult] = self.generator_smart
+        self.evaluator_smart: Agent[None, EvalResult] = self.evaluator_smart
+        self.query_agent: Agent[None, str] = self.query_agent
+        self.self_improvement_agent: Agent[None, str] = self.self_improvement_agent
+        self.sync_agent: Agent[None, AuditResult] = self.sync_agent
         
         self.client = genai.Client() if HAS_GENAI else None
         self.sync_queue: asyncio.Queue = asyncio.Queue()
@@ -133,7 +144,7 @@ class MemoryAgent:
         retry_counts = {} # path:memory_id -> count
         MAX_RETRIES = 3
         
-        while not _shutdown_event.is_set():
+        while _shutdown_event and not _shutdown_event.is_set():
             try:
                 task = await asyncio.wait_for(self.sync_queue.get(), timeout=5.0)
                 task_key = f"{task['path']}:{task['memory_id']}"
@@ -215,8 +226,8 @@ class MemoryAgent:
 
     async def adversarial_consolidation(
         self,
-        generator: Agent,
-        evaluator: Agent,
+        generator: Agent[None, SynthesisResult],
+        evaluator: Agent[None, EvalResult],
         raw_memories_text: str,
         max_attempts: int = 3,
         quality_threshold: float = 0.85,
@@ -224,9 +235,7 @@ class MemoryAgent:
         """
         Generator-Evaluator adversarial loop using PydanticAI structured results.
         """
-        from models import SynthesisResult, EvalResult
         feedback = "No feedback yet. Generate the initial synthesis."
-        
         for attempt in range(max_attempts):
             # Step 1: Generator creates synthesis (Structured Result)
             gen_result = await retry_with_backoff(
@@ -420,7 +429,7 @@ async def autodream_loop(agent: MemoryAgent, check_interval: int = 300):
     
     log.info(f"💤 AutoDream: checking every {check_interval}s, triggers after {IDLE_THRESHOLD_MINUTES}min idle")
     
-    while not _shutdown_event.is_set():
+    while _shutdown_event and not _shutdown_event.is_set():
         try:
             await asyncio.wait_for(_shutdown_event.wait(), timeout=check_interval)
             break
@@ -517,7 +526,7 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
     folder.mkdir(parents=True, exist_ok=True)
     log.info(f"👁️  Watching: {folder}/")
 
-    while not _shutdown_event.is_set():
+    while _shutdown_event and not _shutdown_event.is_set():
         try:
             files = sorted(folder.iterdir())
             for f in files:
@@ -582,7 +591,7 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
 async def consolidation_loop(agent: MemoryAgent, interval_minutes: int = 30):
     """Run consolidation periodically."""
     log.info(f"🔄 Consolidation: every {interval_minutes} minutes")
-    while not _shutdown_event.is_set():
+    while _shutdown_event and not _shutdown_event.is_set():
         try:
             await asyncio.wait_for(_shutdown_event.wait(), timeout=interval_minutes * 60)
             break
@@ -602,7 +611,7 @@ async def consolidation_loop(agent: MemoryAgent, interval_minutes: int = 30):
 
 async def deep_reconsolidate_loop(agent: MemoryAgent, interval_hours: int = 24):
     """Run deep re-consolidation every 24 hours."""
-    while not _shutdown_event.is_set():
+    while _shutdown_event and not _shutdown_event.is_set():
         try:
             await asyncio.wait_for(_shutdown_event.wait(), timeout=interval_hours * 3600)
             break
@@ -639,6 +648,17 @@ async def main_async(args):
         asyncio.create_task(agent.sync_worker_loop()),
     ]
 
+    # MCP server (optional — disabled if --mcp-port 0 or MCP_PORT=0)
+    from config import MCP_PORT, MCP_HOST
+    mcp_port = args.mcp_port if args.mcp_port is not None else MCP_PORT
+    mcp_host = args.mcp_host if args.mcp_host is not None else MCP_HOST
+
+    if mcp_port != 0:
+        from mcp_server import run_mcp_server
+        tasks.append(asyncio.create_task(run_mcp_server(agent, host=mcp_host, port=mcp_port)))
+        log.info(f"🔌 MCP server task queued on {mcp_host}:{mcp_port}")
+    else:
+        log.info("🔌 MCP server disabled (--mcp-port 0 or MCP_PORT=0)")
 
     app = build_http(agent, watch_path=args.watch)
     runner = web.AppRunner(app)
@@ -662,13 +682,26 @@ def main():
     parser.add_argument("--watch", default=INBOX_DIR, help="Folder to watch")
     parser.add_argument("--port", type=int, default=8888, help="API port")
     parser.add_argument("--consolidate-every", type=int, default=30, help="Interval in minutes")
+    parser.add_argument(
+        "--mcp-port",
+        type=int,
+        default=None,
+        help="Port for the MCP server (default: MCP_PORT env var or 8765). Pass 0 to disable MCP.",
+    )
+    parser.add_argument(
+        "--mcp-host",
+        type=str,
+        default=None,
+        help="Bind host for the MCP server (default: MCP_HOST env var or 0.0.0.0).",
+    )
     args = parser.parse_args()
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     def _signal_handler(sig=None):
-        _shutdown_event.set()
+        if _shutdown_event:
+            _shutdown_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
@@ -676,7 +709,8 @@ def main():
     try:
         loop.run_until_complete(main_async(args))
     except (KeyboardInterrupt, asyncio.CancelledError):
-        _shutdown_event.set()
+        if _shutdown_event:
+            _shutdown_event.set()
     finally:
         loop.close()
 

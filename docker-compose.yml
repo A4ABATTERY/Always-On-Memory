@@ -1,0 +1,51 @@
+services:
+  aom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: always-on-memory
+    restart: unless-stopped
+
+    ports:
+      - "${REST_PORT:-8888}:8888"      # REST API
+      - "${MCP_PORT_HOST:-8765}:8765"  # MCP server
+
+    environment:
+      # Required: your Google Gemini API key
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+
+      # MCP authentication — format: "agent-name:secretkey,agent2:key2"
+      # REQUIRED for Docker deployments. Leaving this blank causes MCP startup to
+      # fail with RuntimeError unless AOM_MCP_NO_AUTH=true is also set.
+      AOM_API_KEYS: "${AOM_API_KEYS}"
+      # Set to "true" only for localhost-only deployments where auth is not needed.
+      AOM_MCP_NO_AUTH: "${AOM_MCP_NO_AUTH:-}"
+
+      # Model selection (optional overrides)
+      MODEL: "${MODEL:-gemini-3.1-flash-lite-preview}"
+      SMART_MODEL: "${SMART_MODEL:-gemini-3-flash-preview}"
+
+      # Paths inside the container (match the volume mounts below)
+      INBOX_DIR: "/inbox"
+      WATCH_DIRS: "/watchdirs"
+      MEMORY_DB: "/app/data/memory.db"
+
+    volumes:
+      # Inbox: drop files here to ingest them
+      - "${INBOX_PATH:-./inbox}:/inbox"
+
+      # Watch dirs: source code / documents for the Librarian to index
+      - "${WATCH_PATH:-./watchdirs}:/watchdirs"
+
+      # Persistent database storage
+      - "${DATA_PATH:-./data}:/app/data"
+
+      # Skills directory (persisted across container restarts)
+      - "${SKILLS_PATH:-./.agents/skills}:/app/.agents/skills"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

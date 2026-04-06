@@ -154,6 +154,91 @@ Run the unit test suite to ensure everything is working correctly:
 PYTHONPATH=. ./.venv/bin/python -m unittest discover tests
 ```
 
+## MCP Server
+
+Always-On-Memory exposes a Model Context Protocol (MCP) server alongside its
+REST API. Any MCP-compatible agent (Claude, GPT, Gemini, OpenClaw, etc.) can
+use it to store and retrieve memories.
+
+### Starting the MCP Server
+
+The MCP server starts automatically with the agent. Configure it via `.env`
+or command-line flags:
+
+```bash
+# Local (default): MCP on port 8765, REST on port 8888
+python agent.py --watch ./inbox --port 8888 --mcp-port 8765
+
+# Disable MCP server
+python agent.py --mcp-port 0
+
+# Custom host/port
+python agent.py --mcp-host 127.0.0.1 --mcp-port 9000
+```
+
+### Authentication
+
+Set `AOM_API_KEYS` to a comma-separated list of `name:key` pairs. Each key
+is used by exactly one agent:
+
+```bash
+# In .env
+AOM_API_KEYS=claude-desktop:your-secret-key,gpt-agent:another-key
+```
+
+All MCP requests must include `Authorization: Bearer <key>`. If `AOM_API_KEYS`
+is unset, authentication is **disabled** (only safe for localhost deployments).
+
+### Claude Desktop / Claude Code Configuration
+
+Add to your Claude Desktop `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "always-on-memory": {
+      "transport": {
+        "type": "http",
+        "url": "http://localhost:8765/mcp"
+      },
+      "headers": {
+        "Authorization": "Bearer your-secret-key"
+      }
+    }
+  }
+}
+```
+
+### Docker
+
+```bash
+# Copy and edit the environment file
+cp .env .env.local
+# Set GOOGLE_API_KEY and AOM_API_KEYS in .env.local
+
+docker compose --env-file .env.local up -d
+```
+
+Ports exposed: `8888` (REST API) and `8765` (MCP server).
+
+### Available MCP Tools
+
+| Tier | Tool | Description |
+|------|------|-------------|
+| Core | `remember(text, source?)` | Store information into persistent memory |
+| Core | `recall(question)` | Search memories and synthesise an answer |
+| Core | `status()` | Get memory system health statistics |
+| Core | `forget(memory_id)` | Permanently delete a memory |
+| Power | `list_memories(limit?)` | Browse memories ranked by importance |
+| Power | `search_documents(query, limit?)` | Semantic search over indexed source files |
+| Power | `consolidate()` | Trigger adversarial consolidation (lite models) |
+| Power | `deep_reconsolidate()` | Full re-consolidation with smart models |
+| Power | `export_memories(memory_ids?)` | Export MemCubes as portable JSON |
+| Power | `import_memories(cubes)` | Import MemCube JSON |
+| Power | `list_links()` | List code-memory structural links |
+| Power | `reinforce(memory_id)` | Boost importance and reset decay clock |
+| Power | `self_improve()` | Trigger self-improvement skill discovery |
+
 ## API Reference
 
 | Endpoint | Method | Description |
