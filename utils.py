@@ -8,15 +8,13 @@ import struct
 from pathlib import Path
 from typing import List, Optional, Any, Callable
 
+import numpy as np
+
 from turboquant import get_turboquant
 
 from config import (
-    BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL  # This will be tricky if _shutdown_event is in main
+    BINARY_EXTENSIONS, RATE_LIMIT, EMBEDDING_MODEL
 )
-
-# We might need to move _shutdown_event to a shared place or pass it
-# For now, let's assume it's imported or globally available if we keep it in config or a new 'globals' module.
-# Let's move it to config.py actually.
 
 try:
     from google import genai
@@ -97,31 +95,62 @@ async def retry_with_backoff(
             delay *= 2
     raise last_error
 
+_EMBED_CHUNK_SIZE = 4000  # Safe ceiling below gemini-embedding-2-preview's ~2048 token limit
+
+async def _embed_single(text: str, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
+    """Embed a single text segment (must be <= _EMBED_CHUNK_SIZE chars)."""
+    async def _do_embed():
+        client = genai.Client()
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=text,
+        )
+        return result.embeddings[0].values
+
+    async with _embed_semaphore:
+        embedding = await retry_with_backoff(_do_embed, shutdown_event=shutdown_event)
+        await asyncio.sleep(_EMBED_DELAY)
+        return embedding
+
 async def embed_text(text: str, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
-    """Generate an embedding for the given text using google-genai (rate-limited)."""
+    """Generate an embedding for the given text using google-genai (rate-limited).
+
+    For text longer than _EMBED_CHUNK_SIZE characters, splits into chunks and
+    returns the element-wise mean of all chunk embeddings so the full content
+    is represented without risking INVALID_ARGUMENT errors from the API.
+    """
     if not HAS_GENAI:
         return None
     if not text or not text.strip():
         return None
     if shutdown_event and shutdown_event.is_set():
         return None
-    
-    async def _do_embed():
-        client = genai.Client()
-        result = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=text[:2000],
-        )
-        return result.embeddings[0].values
 
-    async with _embed_semaphore:
-        try:
-            embedding = await retry_with_backoff(_do_embed, shutdown_event=shutdown_event)
-            await asyncio.sleep(_EMBED_DELAY)
-            return embedding
-        except Exception as e:
-            log.error(f"Embedding error: {e}")
+    try:
+        if len(text) <= _EMBED_CHUNK_SIZE:
+            return await _embed_single(text, shutdown_event=shutdown_event)
+
+        # Long text: mean-pool chunk embeddings
+        chunks = chunk_text(text, max_chars=_EMBED_CHUNK_SIZE)
+        embeddings = []
+        for chunk in chunks:
+            if shutdown_event and shutdown_event.is_set():
+                return None
+            emb = await _embed_single(chunk, shutdown_event=shutdown_event)
+            if emb:
+                embeddings.append(emb)
+
+        if not embeddings:
             return None
+
+        # Element-wise mean across all chunk embeddings
+        arr = np.array(embeddings, dtype=np.float32)
+        mean_emb = arr.mean(axis=0).tolist()
+        return mean_emb
+
+    except Exception as e:
+        log.error(f"Embedding error: {e}")
+        return None
 
 def chunk_text(text: str, max_chars: int = 1500) -> List[str]:
     """Split text into chunks, trying to break on newlines."""

@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from config import (
-    WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS, 
+    WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS,
     HAS_SQLITE_VEC, SKILLS_DIR, DEBOUNCE_INTERVAL, SCAN_INTERVAL,
-    _shutdown_event, INBOX_DIR
+    get_shutdown_event, INBOX_DIR
 )
 from database import db_session
 from utils import is_binary_file, embed_text, serialize_int8, chunk_text
@@ -26,7 +26,7 @@ async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
     if not HAS_SQLITE_VEC:
         return {"results": [], "error": "Vector search not available (missing sqlite-vec)"}
 
-    query_embedding = await embed_text(query, shutdown_event=_shutdown_event)
+    query_embedding = await embed_text(query, shutdown_event=get_shutdown_event())
     if not query_embedding:
         return {"results": [], "error": "Failed to generate embedding for query."}
 
@@ -209,7 +209,7 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
         all_skip = SKIP_DIRS | extra_ignores
 
         for f in folder.rglob("*"):
-            if _shutdown_event.is_set():
+            if get_shutdown_event().is_set():
                 return
 
             if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
@@ -247,10 +247,10 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
             
             chunks_embeddings = []
             for i, chunk in enumerate(chunks):
-                if _shutdown_event.is_set():
+                if get_shutdown_event().is_set():
                     break
 
-                embedding = await embed_text(chunk, shutdown_event=_shutdown_event)
+                embedding = await embed_text(chunk, shutdown_event=get_shutdown_event())
                 if embedding:
                     chunks_embeddings.append(embedding)
                 
@@ -304,7 +304,7 @@ async def librarian_loop(on_drift_detected: Any = None):
     last_change_time = None
     current_max_mtime = last_indexed_time
     
-    while not _shutdown_event.is_set():
+    while not get_shutdown_event().is_set():
         try:
             latest_mtime = _get_latest_mtime(dirs)
             if latest_mtime > current_max_mtime:
@@ -332,7 +332,7 @@ async def librarian_loop(on_drift_detected: Any = None):
             log.error(f"Indexing error: {e}")
 
         try:
-            await asyncio.wait_for(_shutdown_event.wait(), timeout=SCAN_INTERVAL)
+            await asyncio.wait_for(get_shutdown_event().wait(), timeout=SCAN_INTERVAL)
             break
         except asyncio.TimeoutError:
             pass

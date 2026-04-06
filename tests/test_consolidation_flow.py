@@ -15,28 +15,31 @@ from database import init_db, db_session
 from memory_store import store_memory
 from models import SynthesisResult, EvalResult
 
+_DUMMY_VECTOR = [0.01] * 3072
+
 class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
-    
+
     def setUp(self):
-        # Use a temporary test database
         self.db_path = "test_flow_v3.db"
         self.env_patcher = unittest.mock.patch.dict(os.environ, {"MEMORY_DB": self.db_path})
         self.env_patcher.start()
-        
+        self.embed_patcher = patch("utils.embed_text", AsyncMock(return_value=_DUMMY_VECTOR))
+        self.embed_patcher.start()
+
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
-            
+
         init_db()
-        
-        # Mock the agents to avoid real LLM calls
+
         self.mock_agents = [MagicMock() for _ in range(8)]
         for m in self.mock_agents:
             m.run = AsyncMock()
-            
+
         with patch('agent.build_agents', return_value=self.mock_agents):
             self.agent = MemoryAgent()
 
     def tearDown(self):
+        self.embed_patcher.stop()
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         self.env_patcher.stop()
@@ -60,7 +63,7 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
             source_ids=[m1["memory_id"], m2["memory_id"]],
             connections=[{"from_id": m1["memory_id"], "to_id": m2["memory_id"], "relationship": "same_city"}]
         )
-        self.agent.generator_lite.run.return_value = MagicMock(data=gen_data)
+        self.agent.generator_lite.run.return_value = MagicMock(output=gen_data)
         
         # Evaluator approval
         eval_data = EvalResult(
@@ -70,7 +73,7 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
             completeness=1.0,
             redundancy_removed=1.0
         )
-        self.agent.evaluator_lite.run.return_value = MagicMock(data=eval_data)
+        self.agent.evaluator_lite.run.return_value = MagicMock(output=eval_data)
 
         # 3. Trigger Consolidation
         msg = await self.agent.consolidate()

@@ -8,27 +8,33 @@ import json
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 # Global test DB name
 TEST_DB = "test_core_v3.db"
+_DUMMY_VECTOR = [0.01] * 3072
 
 from database import init_db, db_session
 from memory_store import store_memory, read_all_memories, get_memory_stats
 from models import MemCube
 
 class TestMemoryAgent(unittest.IsolatedAsyncioTestCase):
-    
+
     def setUp(self):
         """Initialize a fresh test database for each test."""
         self.env_patcher = unittest.mock.patch.dict(os.environ, {"MEMORY_DB": TEST_DB})
         self.env_patcher.start()
-        
+        # Prevent real Gemini API calls during store_memory
+        self.embed_patcher = patch("utils.embed_text", AsyncMock(return_value=_DUMMY_VECTOR))
+        self.embed_patcher.start()
+
         if os.path.exists(TEST_DB):
             os.remove(TEST_DB)
         init_db()
 
     def tearDown(self):
         """Clean up the test database."""
+        self.embed_patcher.stop()
         if os.path.exists(TEST_DB):
             os.remove(TEST_DB)
         self.env_patcher.stop()

@@ -21,3 +21,5 @@ __pycache__/
 nohup.out
 AOM-v3_Implementation-Plan.md
 .claude/
+current_developments/
+CLAUDE.md

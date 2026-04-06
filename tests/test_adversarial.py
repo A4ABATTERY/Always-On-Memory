@@ -29,7 +29,7 @@ class TestAdversarialLoop(unittest.IsolatedAsyncioTestCase):
             source_ids=[1, 2],
             connections=[]
         )
-        self.agent.generator_lite.run.return_value = MagicMock(data=gen_data)
+        self.agent.generator_lite.run.return_value = MagicMock(output=gen_data)
         # Evaluator result
         eval_data = EvalResult(
             score=0.95,
@@ -38,7 +38,7 @@ class TestAdversarialLoop(unittest.IsolatedAsyncioTestCase):
             completeness=1.0,
             redundancy_removed=1.0
         )
-        self.agent.evaluator_lite.run.return_value = MagicMock(data=eval_data)
+        self.agent.evaluator_lite.run.return_value = MagicMock(output=eval_data)
         
         result = await self.agent.adversarial_consolidation(
             self.agent.generator_lite,
@@ -60,15 +60,15 @@ class TestAdversarialLoop(unittest.IsolatedAsyncioTestCase):
             source_ids=[1, 2],
             connections=[]
         )
-        self.agent.generator_lite.run.return_value = MagicMock(data=gen_data)
+        self.agent.generator_lite.run.return_value = MagicMock(output=gen_data)
         
         # Evaluator returns 0.5 then 0.9
         eval_1 = EvalResult(score=0.5, feedback="Too short", fidelity=0.5, completeness=0.5, redundancy_removed=0.5)
         eval_2 = EvalResult(score=0.9, feedback="Better", fidelity=0.9, completeness=0.9, redundancy_removed=0.9)
         
         self.agent.evaluator_lite.run.side_effect = [
-            MagicMock(data=eval_1),
-            MagicMock(data=eval_2)
+            MagicMock(output=eval_1),
+            MagicMock(output=eval_2)
         ]
         
         result = await self.agent.adversarial_consolidation(
@@ -91,8 +91,8 @@ class TestAdversarialLoop(unittest.IsolatedAsyncioTestCase):
             source_ids=[1, 2],
             connections=[]
         )
-        self.agent.generator_lite.run.return_value = MagicMock(data=gen_data)
-        self.agent.evaluator_lite.run.return_value = MagicMock(data=EvalResult(score=0.4, feedback="Bad", fidelity=0.4, completeness=0.4, redundancy_removed=0.4))
+        self.agent.generator_lite.run.return_value = MagicMock(output=gen_data)
+        self.agent.evaluator_lite.run.return_value = MagicMock(output=EvalResult(score=0.4, feedback="Bad", fidelity=0.4, completeness=0.4, redundancy_removed=0.4))
         
         with self.assertRaises(Exception) as cm:
             await self.agent.adversarial_consolidation(
