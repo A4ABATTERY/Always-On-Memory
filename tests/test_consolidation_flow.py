@@ -101,5 +101,19 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(insight_cube["raw_text"], "London is cold and has a bridge.")
             self.assertEqual(insight_cube["source"], "adversarial-consolidation")
 
+    async def test_superseded_memory_exclusion(self):
+        """Test that memories marked valid_to < now are excluded from AutoDream read ranges."""
+        m1 = await store_memory("Valid fact", "Valid", [], ["test"], 0.5)
+        m2 = await store_memory("Superseded fact", "Invalid", [], ["test"], 0.5)
+        
+        from memory_store import update_memory_validity, read_unconsolidated_memories
+        update_memory_validity(m2["memory_id"], datetime.now(timezone.utc).isoformat())
+
+        res = read_unconsolidated_memories(limit=10)
+        summaries = [m["summary"] for m in res["memories"]]
+        
+        self.assertIn("Valid", summaries)
+        self.assertNotIn("Invalid", summaries)
+
 if __name__ == "__main__":
     unittest.main()

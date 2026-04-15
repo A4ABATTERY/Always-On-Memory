@@ -8,7 +8,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 # Global test DB name
 TEST_DB = "test_core_v3.db"
@@ -96,6 +96,60 @@ class TestMemoryAgent(unittest.IsolatedAsyncioTestCase):
         old_mem = next(m for m in mems["memories"] if m["summary"] == "Old Summary")
         
         self.assertGreater(new_mem["composite_score"], old_mem["composite_score"])
+
+    async def test_04_watch_folder_hash_update(self):
+        """Verify that updating a file triggers hash change logic."""
+        import tempfile
+        import asyncio
+        import hashlib
+        from agent import watch_folder
+        import agent
+        
+        agent._shutdown_event = asyncio.Event()
+        
+        mock_agent = MagicMock()
+        mock_agent.ingest = AsyncMock(return_value="Ingested")
+
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            test_file = folder / "update_test.txt"
+            
+            test_file.write_text("v1 content")
+            
+            watch_task = asyncio.create_task(watch_folder(mock_agent, folder, poll_interval=1))
+            await asyncio.sleep(0.5)
+            agent._shutdown_event.set()
+            # Catch cancellation
+            try:
+                await asyncio.wait_for(watch_task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            
+            self.assertEqual(mock_agent.ingest.call_count, 1)
+            
+            with db_session() as db:
+                row = db.execute("SELECT content_hash FROM processed_files WHERE path = ?", ("update_test.txt",)).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["content_hash"], hashlib.md5(b"v1 content").hexdigest())
+                
+            # Second run with updated file
+            agent._shutdown_event.clear()
+            test_file.write_text("v2 content")
+            watch_task = asyncio.create_task(watch_folder(mock_agent, folder, poll_interval=1))
+            await asyncio.sleep(0.5)
+            agent._shutdown_event.set()
+            try:
+                await asyncio.wait_for(watch_task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            
+            self.assertEqual(mock_agent.ingest.call_count, 2)
+            
+            with db_session() as db:
+                row = db.execute("SELECT content_hash, prev_hash FROM processed_files WHERE path = ?", ("update_test.txt",)).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["content_hash"], hashlib.md5(b"v2 content").hexdigest())
+                self.assertEqual(row["prev_hash"], hashlib.md5(b"v1 content").hexdigest())
 
 if __name__ == "__main__":
     # Note: test_01 is async, so we'd need to run it with an event loop if using standard unittest

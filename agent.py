@@ -10,6 +10,7 @@ import logging
 import shutil
 import signal
 import time
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -522,60 +523,106 @@ async def _dream_reorganize(agent: MemoryAgent):
                 log.debug(f"Dream cluster consolidation failed: {e}")
 
 async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5):
-    """Watch a folder for new files and ingest them."""
+    """Watch a folder for new files and ingest them, tracking hash updates."""
     folder.mkdir(parents=True, exist_ok=True)
     log.info(f"👁️  Watching: {folder}/")
 
     while _shutdown_event and not _shutdown_event.is_set():
         try:
-            files = sorted(folder.iterdir())
+            with db_session() as db:
+                rows = db.execute("SELECT path, content_hash FROM processed_files").fetchall()
+                hash_map = {r["path"]: r["content_hash"] for r in rows}
+
+            files = []
+            for f in folder.rglob('*'):
+                if f.is_file() and not f.name.startswith("."):
+                    files.append(f)
+            files.sort()
+
             for f in files:
                 if _shutdown_event.is_set():
                     break
-                if f.name.startswith("."):
-                    continue
+                
                 suffix = f.suffix.lower()
                 if suffix not in ALL_SUPPORTED:
                     continue
                 
-                with db_session() as db:
-                    row = db.execute("SELECT 1 FROM processed_files WHERE path = ?", (str(f),)).fetchone()
+                rel_path = str(f.relative_to(folder)).replace('\\', '/')
                 
-                if row:
+                content_bytes = None
+                try:
+                    content_bytes = f.read_bytes()
+                except Exception as e:
+                    log.error(f"Cannot read file {f}: {e}")
                     continue
 
+                if not content_bytes:
+                    continue
+
+                new_hash = hashlib.md5(content_bytes).hexdigest()
+                last_hash = hash_map.get(rel_path)
+                
+                if last_hash == new_hash:
+                    continue
+
+                is_update = last_hash is not None
+
                 try:
+                    rolled_back_mems = []
+                    from memory_store import get_memories_by_source, update_link_status, update_memory_validity
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    
+                    if is_update:
+                        log.info(f"🔄 File update detected for {rel_path}. Invalidating superseded memories.")
+                        old_memory_ids = get_memories_by_source(rel_path)
+                        for mid in old_memory_ids:
+                            update_memory_validity(mid, now_iso)
+                            update_link_status(mid, rel_path, "historical_trace")
+                            rolled_back_mems.append(mid)
+
+                    before_ts = datetime.now(timezone.utc).isoformat()
+
+                    success = False
                     if suffix in TEXT_EXTENSIONS:
-                        log.info(f"📄 New text file: {f.name}")
-                        text = f.read_text(encoding="utf-8", errors="replace")[:10000]
+                        log.info(f"📄 Processing text file: {rel_path} (update: {is_update})")
+                        text = content_bytes.decode('utf-8', errors='replace')[:10000]
                         if text.strip():
-                            await agent.ingest(text, source=f.name)
-                        
-                        with db_session() as db:
-                            db.execute(
-                                "INSERT INTO processed_files (path, processed_at) VALUES (?, ?)",
-                                (str(f), datetime.now(timezone.utc).isoformat()),
-                            )
-                            db.commit()
+                            await agent.ingest(text, source=rel_path)
+                            success = True
                     elif suffix in MEDIA_EXTENSIONS:
-                        log.info(f"🖼️  New media file: {f.name}")
-                        await agent.ingest(f"New media file found: {f.name}", source=f.name)
-                        
+                        log.info(f"🖼️  Processing media file: {rel_path} (update: {is_update})")
+                        await agent.ingest(f"New media file found: {f.name}", source=rel_path)
+                        success = True
+
+                    if success:
                         with db_session() as db:
-                            db.execute(
-                                "INSERT INTO processed_files (path, processed_at) VALUES (?, ?)",
-                                (str(f), datetime.now(timezone.utc).isoformat()),
-                            )
+                            if is_update:
+                                db.execute(
+                                    "UPDATE processed_files SET content_hash = ?, prev_hash = ?, processed_at = ? WHERE path = ?",
+                                    (new_hash, last_hash, now_iso, rel_path)
+                                )
+                            else:
+                                db.execute(
+                                    "INSERT INTO processed_files (path, processed_at, content_hash) VALUES (?, ?, ?)",
+                                    (rel_path, now_iso, new_hash)
+                                )
                             db.commit()
+                        hash_map[rel_path] = new_hash
+
                 except Exception as file_err:
                     log.error(f"Error ingesting {f.name}: {file_err}")
-                    # Mark as processed even on failure to avoid infinite loop (or use a failure count)
-                    with db_session() as db:
-                        db.execute(
-                            "INSERT INTO processed_files (path, processed_at) VALUES (?, ?)",
-                            (str(f), datetime.now(timezone.utc).isoformat() + " (FAILED)"),
-                        )
-                        db.commit()
+                    if is_update and rolled_back_mems:
+                        log.warning(f"Rolling back valid_to stamps for {rel_path}")
+                        for mid in rolled_back_mems:
+                            update_memory_validity(mid, None)
+                            update_link_status(mid, rel_path, "active")
+                            
+                        with db_session() as db:
+                            new_mems = db.execute("SELECT id FROM memories WHERE source = ? AND created_at >= ?", (rel_path, before_ts)).fetchall()
+                            for nm in new_mems:
+                                db.execute("DELETE FROM memories WHERE id = ?", (nm["id"],))
+                                db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (nm["id"],))
+                            db.commit()
 
         except asyncio.CancelledError:
             break

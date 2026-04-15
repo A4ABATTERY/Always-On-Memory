@@ -88,6 +88,17 @@ def init_db() -> None:
             );
         """)
 
+        # Additive migrations for processed_files
+        try:
+            db.execute("ALTER TABLE processed_files ADD COLUMN content_hash TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        try:
+            db.execute("ALTER TABLE processed_files ADD COLUMN prev_hash TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Create vec0 virtual tables for vector search (if sqlite-vec loaded)
         if HAS_SQLITE_VEC:
             try:
