@@ -19,7 +19,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **AutoDream Cycles** | Idle-time "sleep" phase that prunes, reorganizes, and clusters MemCubes |
 | **TurboQuant-inspired int8** | Random orthogonal rotations + int8 scalar quantization (~75% storage reduction) for high-fidelity vector compression |
 | **Structural Linkage** | Proactive background auditing and autonomous "Self-Healing" of code-memory connections (V3.3) |
-| **Memory Ingestion** | Multimodal ingestion (text, images, audio, video) via Inbox or HTTP |
+| **Memory Ingestion** | Recursive, hash-gated multimodal ingestion (text, images, audio, video) from Inbox |
+| **Semantic Invalidation**| Automated hard-expiry (`valid_to`) of superseded memories upon source file updates |
 | **Librarian Mode** | High-performance semantic code search with debounced indexing |
 | **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
 | **Self-Improvement** | Autonomously evolves project-specific skills and patterns (EvoSkill) |
@@ -50,7 +51,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │  └─────────────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                          │
 │  Active Cycles:                                                                          │
-│  • Inbox Watcher (5s)        • AutoDream (Idle > 30m)    • Proactive Sync (Drift Det.)   │
+│  • Recursive Inbox Watcher (5s) • AutoDream (Idle > 30m) • Proactive Sync (Drift Det.)   │
 │  • Consolidation (30m)       • Librarian Indexer (60s)   • Self-Healing Audit (V3.3)     │
 │  • Deep Re-Consolidation (24h)                                                           │
 │  • Self-Improvement Audit (24h)                                                          │
@@ -122,11 +123,12 @@ Press `Ctrl+C` to stop cleanly.
 
 ### 4. Feed it information
 
-**Option A: Drop files in the inbox**
+**Option A: Drop files or folders in the inbox**
 ```bash
 echo "JWT auth is preferred over sessions" > inbox/decision.txt
-cp architecture_notes.md inbox/
-# Agent auto-ingests within 5-10 seconds
+mkdir -p inbox/docs && cp architecture_notes.md inbox/docs/
+# Agent auto-ingests recursively within 5-10 seconds
+# Updates to existing files will semantically invalidate old memories and re-ingest automatically
 ```
 
 **Option B: HTTP API**

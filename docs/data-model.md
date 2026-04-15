@@ -44,6 +44,14 @@ Stores the relational and text-based metadata for each `MemCube`.
 - `importance_score` (FLOAT)
 - `consolidated` (BOOLEAN)
 - `created_at` (DATETIME)
+- `valid_to` (DATETIME): Used for **Semantic Invalidation**. Excludes hard-expired memories (due to source file updates) from consolidation read paths and live query contexts.
+
+### `processed_files` Table
+Tracks ingestion state for the Inbox Watcher to prevent duplicate ingestion and handle file updates.
+- `path` (TEXT PRIMARY KEY): The relative file path in the inbox.
+- `processed_at` (TEXT): Last processing timestamp.
+- `content_hash` (TEXT): MD5 hash of the active file version to detect updates.
+- `prev_hash` (TEXT): Historical MD5 hash allowing rollback/diff tracking.
 
 ### `vec_memories` (Virtual Table)
 An FTS-like virtual table provided by `sqlite-vec` for high-performance vector operations.

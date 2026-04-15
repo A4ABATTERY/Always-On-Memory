@@ -7,7 +7,7 @@ This document provides a high-level overview of the Always-On-Memory (AOM) v3 sy
 ```mermaid
 graph TD
     subgraph "Ingest Layer"
-        Watch[Inbox Watcher] --> Ingest[Ingest Agent]
+        Watch[Recursive Inbox Watcher] --> Ingest[Ingest Agent]
         API_I[API /ingest] --> Ingest
     end
 
@@ -37,8 +37,9 @@ graph TD
 ## 🔄 Core Data Flow
 
 ### 1. Ingestion
-- **Source**: Files dropped into the `inbox/` directory or direct POST requests to `/ingest`.
-- **Process**: The **Ingest Agent** analyzes the content (text, image, audio, or PDF), extracts entities and topics, and assigns an importance score.
+- **Source**: Files or nested folders dropped into the `inbox/` directory or direct POST requests to `/ingest`.
+- **Process**: The **Recursive Inbox Watcher** verifies content hashes. The **Ingest Agent** analyzes the content (text, image, audio, or PDF), extracts entities and topics, and assigns an importance score.
+- **Semantic Invalidation**: If an existing file is updated, prior related memories are immediately marked as superseded (their `valid_to` set to current time) and their links marked as `historical_trace`, cleanly preventing context rot.
 - **Outcome**: A new `MemCube` is persisted in the database with its vector embedding.
 
 ### 2. Adversarial Consolidation

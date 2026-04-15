@@ -39,3 +39,15 @@ AOM v3 is designed to be "Always-On" and self-maintaining. It achieves this thro
 ### The "Forgetting" Cycle
 - **Process**: Gradually decays the `importance_score` of memories that are not frequently recalled or referenced.
 - **Result**: Ensures the context window is always prioritized for the most relevant and "fresh" insights.
+
+## 5. Inbox Watcher & Semantic Invalidation Loop
+### The "Ingestion & Update Tracking" Cycle
+- **Interval**: Real-time poll (every 5s).
+- **Process**:
+    - **Recursive Scan**: Deep scans the `inbox/` for new or modified nested files.
+    - **Update Tracking**: Compares MD5 content hashes against stored `processed_files`.
+    - **Semantic Invalidation**: If a known file is modified:
+        - Prevents contradictions by immediately marking old linked memories as superseded (`valid_to = now()`) and transitioning connections to `historical_trace`.
+        - Safely re-ingests the updated content to produce fresh MemCubes.
+        - Supports a robust transactional roll-back in case the new ingestion fails gracefully during API interactions.
+- **Result**: Guarantees the system stays semantically aligned with the latest source documents without retaining contradiction-causing stale memory contexts.
