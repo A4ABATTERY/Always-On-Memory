@@ -5,7 +5,7 @@ Edge case tests for Always-On-Memory Agent.
 import os
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 # Global test DB name
 TEST_DB = "test_edges_v3.db"
@@ -65,6 +65,40 @@ class TestMemoryEdges(unittest.IsolatedAsyncioTestCase):
         with db_session() as db:
             row = db.execute("SELECT raw_text FROM memories WHERE id = ?", (res["memory_id"],)).fetchone()
             self.assertEqual(row["raw_text"], special)
+
+    async def test_nested_folder_watcher(self):
+        """Verify that files within nested folders are successfully processed."""
+        import tempfile
+        import asyncio
+        from pathlib import Path
+        from agent import watch_folder
+        import agent
+        
+        agent._shutdown_event = asyncio.Event()
+        mock_agent = MagicMock()
+        mock_agent.ingest = AsyncMock(return_value="Ingested")
+
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            nested = folder / "sub" / "folder"
+            nested.mkdir(parents=True)
+            test_file = nested / "nested_test.txt"
+            test_file.write_bytes(b"content")
+
+            watch_task = asyncio.create_task(watch_folder(mock_agent, folder, poll_interval=1))
+            await asyncio.sleep(0.5)
+            agent._shutdown_event.set()
+            try:
+                await asyncio.wait_for(watch_task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            
+            self.assertEqual(mock_agent.ingest.call_count, 1)
+            
+            from database import db_session
+            with db_session() as db:
+                row = db.execute("SELECT 1 FROM processed_files WHERE path = ?", ("sub/folder/nested_test.txt",)).fetchone()
+                self.assertIsNotNone(row)
 
 if __name__ == "__main__":
     unittest.main()

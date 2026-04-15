@@ -130,7 +130,7 @@ def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
     """Read memories that haven't been consolidated yet."""
     with db_session() as db:
         rows = db.execute(
-            "SELECT * FROM memories WHERE consolidated = 0 ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM memories WHERE consolidated = 0 AND (valid_to IS NULL OR valid_to > datetime('now')) ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
     memories = []
@@ -156,7 +156,7 @@ def read_unconsolidated_with_embeddings(limit: int = 100) -> List[Dict[str, Any]
             SELECT m.*, vec_to_json(v.embedding) as vector 
             FROM memories m
             JOIN vec_memories v ON m.id = v.memory_id
-            WHERE m.consolidated = 0
+            WHERE m.consolidated = 0 AND (m.valid_to IS NULL OR m.valid_to > datetime('now'))
             ORDER BY m.created_at DESC
             LIMIT ?
             """,
@@ -227,7 +227,7 @@ def read_memory_partition(sector: str, limit: int = 100) -> Dict[str, Any]:
     """Fetches memories from a specific sector."""
     with db_session() as db:
         rows = db.execute(
-            "SELECT * FROM memories WHERE sector = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM memories WHERE sector = ? AND (valid_to IS NULL OR valid_to > datetime('now')) ORDER BY created_at DESC LIMIT ?",
             (sector, limit)
         ).fetchall()
     memories = []
@@ -464,7 +464,7 @@ def delete_memory(memory_id: int) -> Dict[str, Any]:
     log.info(f"🗑️  Deleted memory #{memory_id}")
     return {"status": "deleted", "memory_id": memory_id}
 
-def update_memory_validity(memory_id: int, valid_to: str) -> Dict[str, Any]:
+def update_memory_validity(memory_id: int, valid_to: Optional[str]) -> Dict[str, Any]:
     """Set the valid_to timestamp for an existing memory."""
     with db_session() as db:
         db.execute("UPDATE memories SET valid_to = ? WHERE id = ?", (valid_to, memory_id))
@@ -555,6 +555,27 @@ def get_all_links() -> Dict[str, Any]:
                         "updated_at": c.get("updated_at")
                     })
     return {"links": links, "count": len(links)}
+
+def get_memories_by_source(rel_path: str) -> List[int]:
+    """Find all memories associated with a specific file path."""
+    with db_session() as db:
+        # Check direct source field first
+        rows = db.execute("SELECT id FROM memories WHERE source = ?", (rel_path,)).fetchall()
+        matching_ids = {r["id"] for r in rows}
+
+        # Also find any structural file_links
+        rows2 = db.execute("SELECT id, connections FROM memories WHERE connections LIKE ?", (f'%{rel_path}%',)).fetchall()
+        for r in rows2:
+            try:
+                conns = json.loads(r["connections"])
+                for c in conns:
+                    if c.get("type") == "file_link" and c.get("path") == rel_path:
+                        matching_ids.add(r["id"])
+                        break
+            except json.JSONDecodeError:
+                pass
+
+    return list(matching_ids)
 
 
 
