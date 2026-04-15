@@ -91,8 +91,8 @@ Create a `.env` file (the agent loads it automatically):
 ```env
 GOOGLE_API_KEY="your-gemini-api-key"
 
-MODEL="gemini-3.1-flash-lite"
-SMART_MODEL="gemini-3.0-flash"
+MODEL="gemini-3.1-flash-lite-preview"
+SMART_MODEL="gemini-3-flash-preview"
 EMBEDDING_MODEL="gemini-embedding-2-preview"
 RATE_LIMIT="15"
 
