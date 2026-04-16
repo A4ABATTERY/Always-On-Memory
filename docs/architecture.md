@@ -31,6 +31,8 @@ graph TD
         Query[Query Agent] --> Store
         Librarian --> Sync[Sync Auditor]
         Sync --> Store
+        Librarian --> LSI[Lexical Symbol Index]
+        LSI --> Store
     end
 ```
 
@@ -53,12 +55,14 @@ graph TD
 - **Self-Healing**: Significant drift triggers the **Sync Auditor**, which updates the link status (ACTIVE, REPAIR, or HISTORICAL) and can trigger a memory repair if the implementation has diverged from the memory's description.
 
 ### 4. Query & Recall
-- **Trigger**: User question via the API or another agent.
+- **Trigger**: User question via the REST API, MCP tool call, or another agent.
 - **Process**: The **Query Agent** performs a hybrid search (semantic vector search + relational metadata) to retrieve the most relevant `MemCubes`.
+- **Lexical Navigation**: The **Lexical Symbol Index (LSI)** provides instant, exact-match code navigation by indexing class and function signatures.
 - **Outcome**: A grounded answer synthesized from actual project history and linked source files.
 
 ## 🛠️ Key Technologies
 - **PydanticAI**: Agent orchestration and structured result validation.
 - **SQLite + sqlite-vec**: Unified storage for metadata and high-performance vectors.
 - **TurboQuant**: 3.5-bit vector compression for efficient long-term storage.
-- **Aiohttp**: Asynchronous HTTP API layer.
+- **FastMCP**: High-performance Model Context Protocol (MCP) server for tool-based agent interaction.
+- **Aiohttp**: Asynchronous HTTP (REST) API layer.

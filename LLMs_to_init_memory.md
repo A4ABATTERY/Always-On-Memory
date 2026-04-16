@@ -20,7 +20,7 @@ To provide continuity, scan the local system for previous conversation artifacts
 
 | Tool | Linux Path | macOS Path | Windows Path |
 | :--- | :--- | :--- | :--- |
-| **Antigravity** | `~/.gemini/antigravity/brain/` | `~/.gemini/antigravity/brain/` | `~\.gemini\antigravity\brain\` |
+| **Antigravity** | `~/.gemini/antigravity/brain/` | `~/.gemini/antigravity/brain/` | `%USERPROFILE%\.gemini\antigravity\brain\` |
 | **Claude Code** | `~/.claude/projects/` | `~/.claude/projects/` | `~\.claude\projects\` |
 | **Cursor Chat** | `~/.config/Cursor/User/workspaceStorage/` | `~/Library/Application/Support/Cursor/User/workspaceStorage/` | `%APPDATA%\Cursor\User\workspaceStorage\` |
 | **VS Code Copilot**| `~/.config/Code/User/workspaceStorage/` | `~/Library/Application/Support/Code/User/workspaceStorage/` | `%APPDATA%\Code\User\workspaceStorage\` |

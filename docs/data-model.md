@@ -27,6 +27,9 @@ class MemCube(BaseModel):
     embedding: List       # 3072-dimensional vector (Gemini)
     importance: float     # 0.0 to 1.0
     consolidated: bool    # True if merged into an Insight Cube
+    origin_platform: str  # Platform identifier (e.g., "aom-local")
+    access_count: int     # Number of times this memory was recalled
+    last_accessed: str    # ISO timestamp of last recall
 ```
 
 ## 🗄️ SQLite Schema
@@ -57,6 +60,16 @@ Tracks ingestion state for the Inbox Watcher to prevent duplicate ingestion and 
 An FTS-like virtual table provided by `sqlite-vec` for high-performance vector operations.
 - `memory_id` (INTEGER references memories.id)
 - `embedding` (VECTOR int8)
+
+### `symbols` Table
+The **Lexical Symbol Index (LSI)** — a dedicated relational index for named code identifiers (functions, classes, variables, constants).
+- `id` (INTEGER PRIMARY KEY)
+- `file_path` (TEXT): Absolute path to the source file.
+- `symbol_name` (TEXT): The identifier name (e.g., `MemoryAgent`).
+- `symbol_type` (TEXT): The type (e.g., `class`, `def`, `const`).
+- `line_no` (INTEGER): Line number where the symbol is defined.
+- `signature` (TEXT): Full signature line (e.g., `class MemoryAgent(BaseAgent):`).
+- `updated_at` (TEXT): Timestamp of last indexing.
 
 ## 🏎️ TurboQuant-inspired int8 Quantization
 

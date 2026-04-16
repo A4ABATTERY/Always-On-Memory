@@ -761,7 +761,7 @@ async def main_async(args):
     init_db()
     agent = MemoryAgent()
 
-    log.info("🧠 Agent Memory Layer v2 starting (Refactored)")
+    log.info("🧠 Agent Memory Layer v3.3 starting (Unified Intelligence)")
     
     tasks = [
         asyncio.create_task(watch_folder(agent, Path(args.watch))),
@@ -802,7 +802,7 @@ async def main_async(args):
         log.info("🧠 Agent stopped.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Agent Memory Layer v2 - PydanticAI")
+    parser = argparse.ArgumentParser(description="Always-On-Memory Agent v3.3")
     parser.add_argument("--watch", default=INBOX_DIR, help="Folder to watch")
     parser.add_argument("--port", type=int, default=8888, help="API port")
     parser.add_argument("--consolidate-every", type=int, default=30, help="Interval in minutes")

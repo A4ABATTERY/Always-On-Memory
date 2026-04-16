@@ -51,3 +51,12 @@ AOM v3 is designed to be "Always-On" and self-maintaining. It achieves this thro
         - Safely re-ingests the updated content to produce fresh MemCubes.
         - Supports a robust transactional roll-back in case the new ingestion fails gracefully during API interactions.
 - **Result**: Guarantees the system stays semantically aligned with the latest source documents without retaining contradiction-causing stale memory contexts.
+
+## 6. Self-Improvement Loop (EvoSkill)
+### The "Evolution" Cycle
+- **Trigger**: Manual trigger (`POST /improve` or MCP tool) or high-importance success events.
+- **Process**:
+    - **Strategy Audit**: Scans **Reflection** memories for "lessons learned" or successful problem-solving paths.
+    - **Pattern Discovery**: Identifies recurring architectural or workflow patterns specific to the codebase.
+    - **Skill Evolution**: Synthesizes these discoveries into structured `SKILL.md` files or updates existing ones.
+- **Result**: The agent's capabilities grow more specialized and efficient the more it is used on the project.

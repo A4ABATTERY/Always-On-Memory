@@ -21,7 +21,8 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Structural Linkage** | Proactive background auditing and autonomous "Self-Healing" of code-memory connections (V3.3) |
 | **Memory Ingestion** | Recursive, hash-gated multimodal ingestion (text, images, audio, video) from Inbox |
 | **Semantic Invalidation**| Automated hard-expiry (`valid_to`) of superseded memories upon source file updates |
-| **Librarian Mode** | High-performance semantic code search with debounced indexing |
+| **Librarian Mode** | High-performance semantic code search with structural chunking |
+| **Lexical Symbol Index**| Fast O(log n) identifier lookups (functions, classes, constants) |
 | **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
 | **Self-Improvement** | Autonomously evolves project-specific skills and patterns (EvoSkill) |
 | **Rate-Limit Resilience** | Production-grade exponential backoff for Gemini API quotas |
@@ -282,11 +283,13 @@ Memories are categorized into psychological sectors for richer retrieval:
 
 ## Librarian Mode (Vector Search)
 
-When `WATCH_DIRS` is set, the agent periodically scans those directories for changes using `os.path.getmtime`. To avoid indexing while files are still being actively modified (e.g., by an LLM), it implements a **60-second debounce timer**.
+When `WATCH_DIRS` is set, the agent periodically scans those directories for changes using `os.path.getmtime`. To avoid indexing while files are still being actively modified (e.g., by an LLM), it implements a **10-second debounce timer**.
 
 - **Detection**: Checks for modifications every 5 seconds (`SCAN_INTERVAL`).
-- **Debounce**: Waits for a 60-second quiet window (`DEBOUNCE_INTERVAL`) after the last detected change before indexing.
-- **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`).
+- **Debounce**: Waits for a 10-second quiet window (`DEBOUNCE_INTERVAL`) after the last detected change before indexing.
+- **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`). 
+- **Structural Chunking**: Code is partitioned using language-aware boundaries (functions/classes) rather than fixed character offsets, ensuring semantic units remain intact.
+- **Lexical Symbol Index (LSI)**: Extract classes, functions, and variable signatures into a dedicated relational index for instant, exact-match code navigation.
 
 **What gets indexed:** `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.md`, `.json`, `.yaml`, `.toml`, and 20+ other code/config extensions.
 
@@ -320,14 +323,19 @@ All LLM calls use `retry_with_backoff()`:
 | Variable | Default | Description |
 |---|---|---|
 | `GOOGLE_API_KEY` | (required) | Gemini API key |
-| `MODEL` | `gemini-3.1-flash-lite` | Lite model for ingest/consolidate/query |
-| `SMART_MODEL` | `gemini-3.0-flash` | Smart model for deep re-consolidation |
+| `MODEL` | `gemini-3.1-flash-lite-preview` | Lite model for ingest/consolidate/query |
+| `SMART_MODEL` | `gemini-3-flash-preview` | Smart model for deep re-consolidation |
 | `EMBEDDING_MODEL` | `gemini-embedding-2-preview` | Model for vector embeddings |
 | `MEMORY_DB` | `memory.db` | SQLite database path |
 | `RATE_LIMIT` | `15` | Max concurrent model requests |
 | `WATCH_DIRS` | (empty) | Comma-separated dirs for Librarian mode |
 | `IGNORE_DIRS` | (empty) | Extra directory names to skip |
-| `SKILLS_DIR` | `.agent/skills` | Directory where skills are stored |
+| `SKILLS_DIR` | `.agents/skills` | Directory where skills are stored |
+| `DEBOUNCE_INTERVAL` | `10` | Seconds to wait after change before indexing |
+| `DRIFT_THRESHOLD` | `0.18` | Threshold for link evolution auditing |
+| `PROMOTION_THRESHOLD` | `0.35` | Threshold for promoting code to semantic memory |
+| `IDLE_THRESHOLD_MINUTES` | `30` | Idle time before AutoDream begins |
+| `AOM_API_KEYS` | (empty) | `name:key` pairs for MCP authentication |
 
 ## Project Structure
 
@@ -361,7 +369,7 @@ This project integrates several cutting-edge concepts from the AI research commu
 - **AutoDream**: Derived from [Anthropic's](https://claudefa.st/blog/guide/mechanics/auto-dream) experimental background memory consolidation feature for Claude Code.
 - **TurboQuant**: Inspired by [Google's TurboQuant](https://www.marktechpost.com/2026/03/25/google-introduces-turboquant-a-new-compression-algorithm-that-reduces-llm-key-value-cache-memory-by-6x-and-delivers-up-to-8x-speedup-all-with-zero-accuracy-loss/) — applies a seeded random orthogonal rotation before int8 scalar quantization, achieving ~75% storage reduction (float32 → int8) while preserving cosine similarity.
 
-For detailed instructions on how to integrate your own agents with this memory layer, see the [Agent Memory Integration Guide](file:///home/arbi/Always-On-Memory/Agents.md).
+For detailed instructions on how to integrate your own agents with this memory layer, see the [Agent Memory Integration Guide](Agents.md).
 
 ## Credits
 

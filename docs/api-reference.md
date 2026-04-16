@@ -1,6 +1,6 @@
 # API Reference
 
-AOM v3 exposes a simple, asynchronous HTTP API (via `aiohttp`) for interacting with the memory system. By default, the server runs on port `8000`.
+AOM v3 exposes a simple, asynchronous HTTP API (via `aiohttp`) for interacting with the memory system. By default, the server runs on port `8888`.
 
 ## 🔍 Retrieval Endpoints
 

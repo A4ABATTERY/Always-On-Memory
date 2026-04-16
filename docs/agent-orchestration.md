@@ -33,6 +33,12 @@ AOM v3 is powered by **PydanticAI**, a framework that enables type-safe, structu
 - **Responsibility**: Decides which memories and code chunks are relevant to a user query. It generates the search parameters and synthesizes the final answer using retrieved context.
 - **System Prompt Focus**: Grounding, relevance, and helpfulness.
 
+### 6. Self-Improvement Agent (EvoSkill)
+- **Role**: The "Strategist".
+- **Responsibility**: Analyzes reflection and episodic memories to discover recurring project patterns or successful strategies.
+- **Outcome**: Autonomously writes or updates structured `SKILL.md` files in the `.agents/skills` directory, evolving the system's capabilities over time.
+- **System Prompt Focus**: Pattern discovery, capability expansion, and strategic reasoning.
+
 ## 🛠️ PydanticAI Integration
 
 ### Structured Results (`result_type`)

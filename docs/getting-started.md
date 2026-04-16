@@ -45,13 +45,13 @@ Refer to [Data Model & Persistence](data-model.md) for details on how `WATCH_DIR
 Start the agent with the following command:
 
 ```bash
-python agent.py --watch ./inbox --port 8000
+python agent.py --watch ./inbox --port 8888
 ```
 
 This will start:
 - The **Inbox Watcher** on `./inbox`.
 - The **Librarian** on your `WATCH_DIRS`.
-- The **HTTP API** on port `8000`.
+- The **HTTP API** on port `8888`.
 - The **Background Loops** (Consolidation, AutoDream).
 
 ## 🧪 Documentation "Hello World"
@@ -59,7 +59,7 @@ This will start:
 To verify your setup, try ingesting a new memory via the API:
 
 ```bash
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://localhost:8888/ingest \
   -H "Content-Type: application/json" \
   -d '{"text": "AOM is now operational", "source": "setup"}'
 ```
@@ -67,7 +67,7 @@ curl -X POST http://localhost:8000/ingest \
 Then, query the system:
 
 ```bash
-curl "http://localhost:8000/query?q=what+is+the+status+of+AOM"
+curl "http://localhost:8888/query?q=what+is+the+status+of+AOM"
 ```
 
 ## 🧪 Running Tests

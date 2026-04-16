@@ -53,7 +53,7 @@ curl -s "http://localhost:8888/search?q=JWT+token+validation+logic&k=3"
 
 ---
 
-## 4. Structural Linkage (V3.1+)
+## 4. Structural Linkage (V3.3+)
 
 Always-On-Memory v3 now performs **Structural Linkage** during consolidation cycles. This explicitly maps high-level architectural decisions to concrete file paths.
 
