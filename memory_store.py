@@ -127,11 +127,25 @@ def read_all_memories(limit: int = 200) -> Dict[str, Any]:
     return {"memories": memories, "count": len(memories)}
 
 def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
-    """Read memories that haven't been consolidated yet."""
+    """Read memories that haven't been consolidated yet.
+
+    Insight Cubes produced by synthesis passes are excluded so they don't
+    re-enter the 30-minute consolidation loop and cause compounding API calls.
+    Deep reconsolidation uses read_all_memories() and still processes them.
+    """
+    _SYNTHESIS_SOURCES = (
+        "adversarial-consolidation",
+        "deep-reconsolidation",
+        "autodream-consolidation",
+    )
+    placeholders = ",".join("?" * len(_SYNTHESIS_SOURCES))
     with db_session() as db:
         rows = db.execute(
-            "SELECT * FROM memories WHERE consolidated = 0 AND (valid_to IS NULL OR valid_to > datetime('now')) ORDER BY created_at DESC LIMIT ?",
-            (limit,)
+            f"SELECT * FROM memories WHERE consolidated = 0 "
+            f"AND (valid_to IS NULL OR valid_to > datetime('now')) "
+            f"AND source NOT IN ({placeholders}) "
+            f"ORDER BY created_at DESC LIMIT ?",
+            (*_SYNTHESIS_SOURCES, limit),
         ).fetchall()
     memories = []
     for r in rows:

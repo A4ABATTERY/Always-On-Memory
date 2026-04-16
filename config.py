@@ -67,6 +67,10 @@ IDLE_THRESHOLD_MINUTES: int = int(os.getenv("IDLE_THRESHOLD_MINUTES", "30"))
 AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300"))  # 5 min
 CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
 DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
+# Promotion threshold — distinct from DRIFT_THRESHOLD. A WorkDir file whose drift
+# score exceeds this value is promoted to the Ingest Agent for full semantic ingestion.
+# Set higher than DRIFT_THRESHOLD to avoid over-ingesting minor code edits.
+PROMOTION_THRESHOLD: float = float(os.getenv("PROMOTION_THRESHOLD", "0.35"))
 
 # MCP Server
 MCP_PORT: int = int(os.getenv("MCP_PORT", "8765"))

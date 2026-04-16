@@ -14,10 +14,11 @@ from typing import List, Dict, Any
 from config import (
     WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS,
     HAS_SQLITE_VEC, SKILLS_DIR, DEBOUNCE_INTERVAL, SCAN_INTERVAL,
-    get_shutdown_event, INBOX_DIR
+    get_shutdown_event, INBOX_DIR, PROMOTION_THRESHOLD
 )
 from database import db_session
-from utils import is_binary_file, embed_text, serialize_int8, chunk_text
+from utils import is_binary_file, embed_text, embed_texts_batch, serialize_int8, chunk_text, chunk_code_structural
+from lexical_parser import extract_symbols
 
 log = logging.getLogger("memory-agent.librarian")
 
@@ -54,6 +55,45 @@ async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
                     "chunk_index": r["chunk_index"],
                 })
         return {"results": results, "count": len(results)}
+
+def search_symbols(query: str, k: int = 10) -> Dict[str, Any]:
+    """Search the Lexical Symbol Index for exact or prefix matches on identifier names.
+
+    Use this for identifier lookups: function names, class names, constant names.
+    Do NOT use for semantic/conceptual queries — use search_documents for those.
+
+    Returns file_path, symbol_type, and line_no so the agent can cite the exact location.
+    """
+    with db_session() as db:
+        # 1. Exact match (case-insensitive)
+        rows = db.execute(
+            "SELECT file_path, symbol_name, symbol_type, line_no, signature "
+            "FROM symbols WHERE symbol_name = ? COLLATE NOCASE LIMIT ?",
+            (query, k),
+        ).fetchall()
+
+        match_type = "exact"
+        if not rows:
+            # 2. Prefix match fallback
+            rows = db.execute(
+                "SELECT file_path, symbol_name, symbol_type, line_no, signature "
+                "FROM symbols WHERE symbol_name LIKE ? COLLATE NOCASE LIMIT ?",
+                (query + "%", k),
+            ).fetchall()
+            match_type = "prefix"
+
+    results = [
+        {
+            "file_path": r["file_path"],
+            "symbol_name": r["symbol_name"],
+            "symbol_type": r["symbol_type"],
+            "line_no": r["line_no"],
+            "signature": r["signature"],
+        }
+        for r in rows
+    ]
+    return {"results": results, "count": len(results), "match_type": match_type}
+
 
 def read_document(path: str) -> Dict[str, Any]:
     """Read the full content of a document/file from disk (safe)."""
@@ -195,7 +235,49 @@ async def _check_semantic_drift(path: str, new_embeddings: List[List[float]], on
             else:
                 on_drift_detected(path, memory_id)
 
-async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
+def _has_memory_tag(text: str) -> bool:
+    """Return True if the file contains a '# @memory' promotion tag in a comment line.
+
+    Only matches lines where '#' is the first non-whitespace character, preventing
+    false positives from strings or docstrings like '"Use # @memory to promote."'.
+    """
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#") and "@memory" in stripped:
+            return True
+    return False
+
+
+async def _max_drift_score(path: str, new_embeddings: List[List[float]]) -> float:
+    """Return the maximum cosine drift distance for memories linked to this file."""
+    if not HAS_SQLITE_VEC or not new_embeddings:
+        return 0.0
+    import numpy as np
+    from turboquant import get_turboquant
+
+    centroid = np.mean(new_embeddings, axis=0)
+    tq = get_turboquant(dim=len(centroid))
+    rotated = tq.transform(centroid)
+
+    max_dist = 0.0
+    with db_session() as db:
+        rows = db.execute(
+            "SELECT vec_to_json(v.embedding) as vector FROM memories m "
+            "JOIN vec_memories v ON m.id = v.memory_id WHERE m.connections LIKE ?",
+            (f'%"{path}"%',),
+        ).fetchall()
+    for r in rows:
+        mem_emb = np.array(json.loads(r["vector"]))
+        norm = np.linalg.norm(mem_emb)
+        if norm > 1e-9:
+            mem_emb = mem_emb / norm
+        dist = 1.0 - np.dot(rotated, mem_emb)
+        if dist > max_dist:
+            max_dist = dist
+    return max_dist
+
+
+async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_promotion_triggered: Any = None):
     """Walk directories and index files."""
     indexed = 0
     skipped = 0
@@ -241,29 +323,33 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
                 db.execute("DELETE FROM documents WHERE path = ?", (str(f),))
                 db.commit()
 
-            chunks = chunk_text(text, max_chars=1500)
-            log.info(f"📚 Indexing '{f.name}': {len(chunks)} chunks...")
+            chunks = chunk_code_structural(text, f.suffix)
+            log.info(f"📚 Indexing '{f.name}': {len(chunks)} structural chunks (1 batch embed call)...")
             now = datetime.now(timezone.utc).isoformat()
-            
+
+            if get_shutdown_event().is_set():
+                break
+
+            # Batch-embed all chunks in a single API call instead of N serial calls.
+            all_embeddings = await embed_texts_batch(chunks, shutdown_event=get_shutdown_event())
+
             chunks_embeddings = []
-            for i, chunk in enumerate(chunks):
+            for i, (chunk, embedding) in enumerate(zip(chunks, all_embeddings)):
                 if get_shutdown_event().is_set():
                     break
 
-                embedding = await embed_text(chunk, shutdown_event=get_shutdown_event())
                 if embedding:
                     chunks_embeddings.append(embedding)
-                
-                with db_session() as db: 
+
+                with db_session() as db:
                     cursor = db.execute(
                         "INSERT INTO documents (path, content_hash, chunk_text, chunk_index, updated_at) VALUES (?, ?, ?, ?, ?)",
                         (str(f), content_hash, chunk, i, now),
                     )
                     doc_id = cursor.lastrowid
-                    
+
                     if embedding:
                         try:
-                            # Note: sqlite-vec int8 expects 3072 dims by default in database.py
                             db.execute(
                                 "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_int8(?))",
                                 (doc_id, serialize_int8(embedding)),
@@ -273,15 +359,64 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None):
                     db.commit()
 
             indexed += 1
-            
+
+            # Lexical Symbol Index — upsert named identifiers for this file.
+            symbols = extract_symbols(text, f.suffix)
+            if symbols:
+                now_sym = datetime.now(timezone.utc).isoformat()
+                with db_session() as db:
+                    db.execute("DELETE FROM symbols WHERE file_path = ?", (str(f),))
+                    db.executemany(
+                        "INSERT INTO symbols (file_path, symbol_name, symbol_type, line_no, signature, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                            (str(f), s["name"], s["type"], s["line_no"], s["signature"], now_sym)
+                            for s in symbols
+                        ],
+                    )
+                    db.commit()
+                log.debug(f"📖 LSI: indexed {len(symbols)} symbols from '{f.name}'")
+
             # Semantic Drift Detection (V3.3)
             if on_drift_detected and chunks_embeddings:
                 await _check_semantic_drift(str(f), chunks_embeddings, on_drift_detected)
 
+            # Promotion Logic — full semantic ingest for files tagged # @memory
+            # or with high drift score. Hash-gated to prevent re-promotion on
+            # every indexing cycle when file content hasn't changed.
+            if on_promotion_triggered:
+                tagged = _has_memory_tag(text)
+                drift_score = 0.0
+                if not tagged and chunks_embeddings:
+                    drift_score = await _max_drift_score(str(f), chunks_embeddings)
+                should_promote = tagged or drift_score > PROMOTION_THRESHOLD
+
+                if should_promote:
+                    with db_session() as db:
+                        row = db.execute(
+                            "SELECT promoted_hash FROM documents WHERE path = ? AND chunk_index = 0",
+                            (str(f),),
+                        ).fetchone()
+                    already_promoted = row and row["promoted_hash"] == content_hash
+
+                    if not already_promoted:
+                        reason = "# @memory tag" if tagged else f"drift={drift_score:.3f}"
+                        log.info(f"📢 Promoting '{f.name}' to Ingest Agent ({reason})")
+                        if asyncio.iscoroutinefunction(on_promotion_triggered):
+                            await on_promotion_triggered(str(f), text)
+                        else:
+                            on_promotion_triggered(str(f), text)
+                        with db_session() as db:
+                            db.execute(
+                                "UPDATE documents SET promoted_hash = ? WHERE path = ? AND chunk_index = 0",
+                                (content_hash, str(f)),
+                            )
+                            db.commit()
+
     if indexed > 0 or skipped > 0:
         log.info(f"📚 Indexing complete: {indexed} files indexed, {skipped} unchanged")
 
-async def librarian_loop(on_drift_detected: Any = None):
+async def librarian_loop(on_drift_detected: Any = None, on_promotion_triggered: Any = None):
     """Periodically index documents."""
     log.info("📚 Librarian loop started.")
     if not WATCH_DIRS:
@@ -316,7 +451,7 @@ async def librarian_loop(on_drift_detected: Any = None):
                 elapsed = time.time() - last_change_time
                 if elapsed >= DEBOUNCE_INTERVAL:
                     log.info(f"📚 Librarian: debounce window ({DEBOUNCE_INTERVAL}s) closed. Synchronizing vector index...")
-                    await index_all_dirs(dirs, on_drift_detected=on_drift_detected)
+                    await index_all_dirs(dirs, on_drift_detected=on_drift_detected, on_promotion_triggered=on_promotion_triggered)
                     
                     with db_session() as db:
                         row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()

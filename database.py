@@ -99,6 +99,29 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Lexical Symbol Index — dedicated table for named code identifiers.
+        # Separate from `documents` so symbol lookups are O(log n) via real indexes,
+        # not O(n) full-table scans through a JSON column.
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS symbols (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path   TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                line_no     INTEGER,
+                signature   TEXT,
+                updated_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols (symbol_name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols (file_path);
+        """)
+
+        # Promotion tracking — hash-gates WorkDir file promotion to the Ingest Agent.
+        try:
+            db.execute("ALTER TABLE documents ADD COLUMN promoted_hash TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Create vec0 virtual tables for vector search (if sqlite-vec loaded)
         if HAS_SQLITE_VEC:
             try:

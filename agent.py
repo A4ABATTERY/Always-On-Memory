@@ -93,6 +93,15 @@ class MemoryAgent:
         await self.sync_queue.put({"path": path, "memory_id": memory_id})
         log.debug(f"📤 Pushed sync task for memory #{memory_id} on '{path}'")
 
+    async def promote_file(self, path: str, text: str):
+        """Callback for Librarian to promote a WorkDir file to full semantic ingest.
+
+        Triggered when a file contains a '# @memory' tag or exceeds PROMOTION_THRESHOLD
+        drift score. Delegates to self.ingest() which handles the reflexive-loop guard.
+        """
+        log.info(f"📢 Promoting WorkDir file to semantic memory: {path}")
+        await self.ingest(text[:10000], source=path)
+
     async def _audit_link(self, path: str, memory_id: int):
         """Use the Sync Agent to audit a link after drift is detected."""
         from librarian import read_document
@@ -136,6 +145,18 @@ class MemoryAgent:
             from memory_store import repair_memory
             repair_memory(memory_id, suggested)
             update_link_status(memory_id, path, "active")
+            # Re-embed repaired text so vec_memories reflects the updated content.
+            # Without this, future vector searches use the stale pre-repair embedding.
+            from utils import embed_text, serialize_int8
+            new_embedding = await embed_text(suggested, shutdown_event=_shutdown_event)
+            if new_embedding:
+                with db_session() as db:
+                    db.execute(
+                        "INSERT OR REPLACE INTO vec_memories (memory_id, embedding) VALUES (?, vec_int8(?))",
+                        (memory_id, serialize_int8(new_embedding)),
+                    )
+                    db.commit()
+                log.info(f"🔄 Re-embedded memory #{memory_id} after repair.")
         else:
             log.info(f"✅ Link remains ACTIVE for memory #{memory_id}: {reason}")
             update_link_status(memory_id, path, "active")
@@ -401,8 +422,6 @@ class MemoryAgent:
 
             self._cleanup_orphans(original_source_ids, processed_source_ids)
 
-            # After consolidation, run self-improvement
-            await self.self_improve()
             return f"Deep consolidation complete. Created {insights_created} Insight Cube(s)"
         except Exception as e:
             log.error(f"Deep adversarial consolidation failed: {e}")
@@ -747,7 +766,7 @@ async def main_async(args):
         asyncio.create_task(consolidation_loop(agent, args.consolidate_every)),
         asyncio.create_task(autodream_loop(agent, AUTODREAM_CHECK_INTERVAL)),
         asyncio.create_task(deep_reconsolidate_loop(agent, 24)),
-        asyncio.create_task(librarian_loop(on_drift_detected=agent.push_sync_task)),
+        asyncio.create_task(librarian_loop(on_drift_detected=agent.push_sync_task, on_promotion_triggered=agent.promote_file)),
         asyncio.create_task(agent.sync_worker_loop()),
     ]
 

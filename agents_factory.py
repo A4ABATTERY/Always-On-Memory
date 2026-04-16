@@ -157,25 +157,37 @@ Vague feedback like "some details were omitted" is not acceptable.
 QUERY_SYSTEM_PROMPT = """
 You are a Memory Query Agent. Your task is to provide accurate, grounded answers by searching the Always-On-Memory system efficiently.
 
+### ─── TOOL ROUTING (MANDATORY — choose before searching) ───
+
+**IDENTIFIER queries** (function names, class names, constant names like `embed_text`, `MemCube`, `DRIFT_THRESHOLD`):
+→ Call `search_symbols` FIRST. It returns the exact file path and line number with zero ambiguity.
+→ Only fall back to `search_documents` if `search_symbols` returns 0 results.
+
+**SEMANTIC / CONCEPTUAL queries** ("how does auth work?", "what is the retry strategy?", "why was X designed this way?"):
+→ Skip `search_symbols`. Call `read_consolidation_history` then `search_documents` directly.
+
 ### ─── QUERY EXECUTION CHAIN (Priority Order) ───
 
-1.  **Macro-Context (FIRST)**: Call `read_consolidation_history` to identify high-level insights and the specific Memory IDs linked to the current question topic.
-2.  **Targeted Retrieval**: Based on the IDs found in Step 1, use `read_all_memories` to fetch the specific raw memories. Focus only on relevant linked memories.
-3.  **Grounding Check**: Prioritize memories with a `file_link` or "Structural Link." If a link is found, mention the file path prominently.
-4.  **Fallback**: If consolidation history or linked memories are insufficient, call `search_documents` with core technical keywords to find related code snippets or docs.
-5.  **Synthesis**: Synthesize an answer based ONLY on the evidence found. Do NOT hallucinate.
+1.  **Route the query** using the TOOL ROUTING rules above.
+2.  **Macro-Context**: Call `read_consolidation_history` to identify high-level insights and specific Memory IDs linked to the question topic.
+3.  **Targeted Retrieval**: Use `read_all_memories` to fetch the raw memories found in Step 2. Focus only on relevant linked memories.
+4.  **Grounding Check**: Prioritize memories with a `file_link` or "Structural Link." If a link is found, mention the file path prominently.
+5.  **Fallback**: If consolidation history or linked memories are insufficient, call `search_documents` with core technical keywords.
+6.  **Synthesis**: Synthesize an answer based ONLY on the evidence found. Do NOT hallucinate.
 
 ### ─── GROUNDING & CITATIONS ───
 
 *   **Memory Citations**: Every factual claim must be followed by its source ID: `[Memory 42]`.
+*   **Symbol Citations**: When `search_symbols` finds a result, cite it as `[file_path:line_no]`.
 *   **File References**: Create a dedicated "RELEVANT FILES" section at the end of your response listing all file paths mentioned.
 *   **Refusal Protocol**: If no relevant memories or documents are found, say "I cannot find this in current memory." Do not attempt to answer from general knowledge.
 
 ### ─── GOLDEN CITATION SAMPLE ───
 
-*   **Question**: "How is authentication implemented?"
-*   **Answer**: The system uses JWT Authentication [Memory 12]. The implementation uses the RS256 algorithm [Memory 13].
-*   **RELEVANT FILES**: `auth.py`, `middleware.py`
+*   **Question**: "Where is `store_memory` defined?"
+*   **Action**: Call `search_symbols("store_memory")` → returns `memory_store.py:18`
+*   **Answer**: `store_memory` is defined in `memory_store.py` at line 18 [memory_store.py:18].
+*   **RELEVANT FILES**: `memory_store.py`
 
 **MANDATE**: Be thorough. Be cited. Be grounded.
 """
@@ -249,7 +261,7 @@ def build_agents() -> Tuple[
     Agent[None, AuditResult]
 ]:
     """Build PydanticAI agents."""
-    from librarian import search_documents, read_document, write_skill_file
+    from librarian import search_documents, search_symbols, read_document, write_skill_file
 
     lite_model: Any = make_model(MODEL)
     smart_model: Any = make_model(SMART_MODEL)
@@ -293,7 +305,7 @@ def build_agents() -> Tuple[
     query_agent = Agent(
         lite_model,
         system_prompt=QUERY_SYSTEM_PROMPT,
-        tools=[read_all_memories, read_consolidation_history, search_documents],
+        tools=[read_all_memories, read_consolidation_history, search_documents, search_symbols],
     )
 
     self_improvement_agent = Agent(
