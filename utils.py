@@ -19,9 +19,13 @@ from config import (
 
 try:
     from google import genai
+    from google.genai import types
     HAS_GENAI = True
+    _GENAI_CLIENT = None
 except ImportError:
     HAS_GENAI = False
+    _GENAI_CLIENT = None
+    types = Any 
 
 log = logging.getLogger("memory-agent.utils")
 
@@ -104,13 +108,42 @@ _EMBED_CHUNK_SIZE = 4000  # Safe ceiling below gemini-embedding-2-preview's ~204
 _embed_cache: Dict[str, List[float]] = {}
 _EMBED_CACHE_MAX = 512
 
-async def _embed_single(text: str, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
+def _get_client():
+    """Get or initialize the shared GenAI client."""
+    global _GENAI_CLIENT
+    if _GENAI_CLIENT is None and HAS_GENAI:
+        _GENAI_CLIENT = genai.Client()
+    return _GENAI_CLIENT
+
+def _prepare_embedding_text(text: str, task_type: str = "document", title: Optional[str] = None) -> str:
+    """
+    Format text with task-specific instructions for gemini-embedding-2-preview.
+    
+    Tasks:
+    - 'document': title: {title} | text: {text}
+    - 'query': task: search result | query: {text}
+    - 'retrieval': task: code retrieval | query: {text}
+    """
+    if task_type == "document":
+        prefix = f"title: {title} | " if title else ""
+        return f"{prefix}text: {text}"
+    elif task_type == "query":
+        return f"task: search result | query: {text}"
+    elif task_type == "retrieval":
+        return f"task: code retrieval | query: {text}"
+    return text
+
+async def _embed_single(text: str, task_type: str = "document", title: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
     """Embed a single text segment (must be <= _EMBED_CHUNK_SIZE chars)."""
     async def _do_embed():
-        client = genai.Client()
+        client = _get_client()
+        if not client: return None
+        
+        formatted_text = _prepare_embedding_text(text, task_type=task_type, title=title)
+        
         result = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            contents=text,
+            contents=formatted_text,
         )
         return result.embeddings[0].values
 
@@ -119,15 +152,47 @@ async def _embed_single(text: str, shutdown_event: Optional[asyncio.Event] = Non
         await asyncio.sleep(_EMBED_DELAY)
         return embedding
 
-async def embed_text(text: str, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
+async def embed_texts_batch(
+    texts: List[str], 
+    task_type: str = "document", 
+    titles: Optional[List[str]] = None,
+    shutdown_event: Optional[asyncio.Event] = None
+) -> List[List[float]]:
+    """Embed a list of strings in one API call (max 100 per call for Gemini)."""
+    if not HAS_GENAI or not texts:
+        return []
+
+    # Map texts to Content objects to force proper batching in the SDK
+    contents = []
+    for i, t in enumerate(texts):
+        title = titles[i] if titles and i < len(titles) else None
+        formatted = _prepare_embedding_text(t, task_type=task_type, title=title)
+        contents.append(types.Content(parts=[types.Part(text=formatted)]))
+
+    async def _do_batch_embed():
+        client = _get_client()
+        if not client: return []
+        
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=contents,
+        )
+        # result.embeddings is a list of Embedding objects
+        return [emb.values for emb in result.embeddings]
+
+    async with _embed_semaphore:
+        try:
+            results = await retry_with_backoff(_do_batch_embed, shutdown_event=shutdown_event)
+            await asyncio.sleep(_EMBED_DELAY)
+            return results
+        except Exception as e:
+            log.error(f"Batch embedding failed: {e}")
+            return []
+
+async def embed_text(text: str, task_type: str = "document", title: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
     """Generate an embedding for the given text using google-genai (rate-limited).
-
-    For text longer than _EMBED_CHUNK_SIZE characters, splits into chunks and
-    returns the element-wise mean of all chunk embeddings so the full content
-    is represented without risking INVALID_ARGUMENT errors from the API.
-
-    Results are cached in-process (up to _EMBED_CACHE_MAX entries) to avoid
-    redundant API calls for repeated query strings within a session.
+    
+    Now supports Gemini V2 instruction prefixing via task_type and title.
     """
     if not HAS_GENAI:
         return None
@@ -136,14 +201,16 @@ async def embed_text(text: str, shutdown_event: Optional[asyncio.Event] = None) 
     if shutdown_event and shutdown_event.is_set():
         return None
 
-    cache_key = hashlib.sha256(text.encode()).hexdigest()[:20]
+    # Cache key includes task type and title to distinguish differently prefixed versions of the same text
+    cache_str = f"{task_type}:{title}:{text}"
+    cache_key = hashlib.sha256(cache_str.encode()).hexdigest()[:20]
     if cache_key in _embed_cache:
         log.debug(f"Embed cache hit (key={cache_key[:8]})")
         return _embed_cache[cache_key]
 
     try:
         if len(text) <= _EMBED_CHUNK_SIZE:
-            result = await _embed_single(text, shutdown_event=shutdown_event)
+            result = await _embed_single(text, task_type=task_type, title=title, shutdown_event=shutdown_event)
         else:
             # Long text: mean-pool chunk embeddings
             chunks = chunk_text(text, max_chars=_EMBED_CHUNK_SIZE)
@@ -151,7 +218,7 @@ async def embed_text(text: str, shutdown_event: Optional[asyncio.Event] = None) 
             for chunk in chunks:
                 if shutdown_event and shutdown_event.is_set():
                     return None
-                emb = await _embed_single(chunk, shutdown_event=shutdown_event)
+                emb = await _embed_single(chunk, task_type=task_type, title=title, shutdown_event=shutdown_event)
                 if emb:
                     embeddings.append(emb)
 

@@ -1,6 +1,12 @@
 # Instruction: Always-On-Memory (AOM) Initialization
 
-Use this instruction when starting up a fresh AOM instance for a project to ensure the memory layer is immediately useful and grounded in existing project context and history.
+Use this instruction when starting up a fresh AOM instance or upgrading to `gemini-embedding-2-preview` to ensure the memory layer is correctly grounded and semantic drift is minimized.
+
+## Phase 0: Environment & Model Pre-check
+If you are upgrading from a previous embedding model (e.g., `text-embedding-004`) to `gemini-embedding-2-preview`:
+1.  **Semantic Mismatch**: New embedding prefixes (`title: | text:`) create a semantic mismatch.
+2.  **Mandatory Re-index**: You **must** delete your `memory.db` file to trigger a full re-index of the codebase and memories.
+3.  **Client Singleton**: Ensure `utils.py` is configured with the `google-genai` SDK v0.3.0+.
 
 ## Phase 1: Codebase Grounding
 AOM's Librarian automatically indexes source code, but high-level architectural insights must be explicitly generated and ingested.
