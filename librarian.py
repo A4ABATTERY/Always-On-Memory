@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,12 +156,15 @@ def _get_latest_mtime(dirs: List[str]) -> float:
 
     latest_mtime = 0.0
     for dir_path in dirs:
-        folder = Path(dir_path).expanduser().resolve()
-        if not folder.is_dir():
+        # Normalize dir_path for Windows consistency
+        folder = Path(os.path.normpath(os.path.abspath(os.path.expanduser(dir_path))))
+        if not folder.exists():
             continue
-        
+            
         for f in folder.rglob("*"):
-            if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
+            # Ensure f is an absolute, normalized string path
+            f_abs = os.path.normcase(os.path.abspath(str(f)))
+            if os.path.isdir(f_abs) or Path(f_abs).suffix.lower() not in CODE_EXTENSIONS or is_binary_file(f_abs):
                 continue
             
             parts = f.parts
@@ -202,14 +206,14 @@ async def _check_semantic_drift(path: str, new_embeddings: List[List[float]], on
             JOIN vec_memories v ON m.id = v.memory_id
             WHERE m.connections LIKE ?
             """,
-            (f'%"{path}"%',) # Rough filter, refined below
+            (f'%{os.path.basename(path)}%',) # Pre-filter by filename to avoid full table scan
         ).fetchall()
 
     for r in rows:
         connections = json.loads(r["connections"])
         is_active_link = any(
             c.get("type") == "file_link" and 
-            c.get("path") == path and 
+            os.path.normcase(os.path.abspath(c.get("path", ""))) == os.path.normcase(os.path.abspath(path)) and 
             c.get("status", "active") == "active"
             for c in connections
         )
@@ -264,7 +268,7 @@ async def _max_drift_score(path: str, new_embeddings: List[List[float]]) -> floa
         rows = db.execute(
             "SELECT vec_to_json(v.embedding) as vector FROM memories m "
             "JOIN vec_memories v ON m.id = v.memory_id WHERE m.connections LIKE ?",
-            (f'%"{path}"%',),
+            (f'%{os.path.basename(path)}%',),
         ).fetchall()
     for r in rows:
         mem_emb = np.array(json.loads(r["vector"]))
@@ -297,8 +301,9 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
             if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
                 continue
             
-            parts = f.parts
-            if any(p.startswith(".") or p in all_skip for p in parts):
+            # Only skip hidden files/dirs relative to the watch root
+            rel_parts = f.relative_to(folder).parts
+            if any(p.startswith(".") or p in all_skip for p in rel_parts):
                 continue
             if is_binary_file(f):
                 continue
@@ -309,18 +314,20 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                 continue
 
             content_hash = hashlib.md5(text.encode()).hexdigest()
+            f_abs = os.path.normcase(os.path.abspath(str(f)))
 
             with db_session() as db:
                 existing = db.execute(
                     "SELECT content_hash FROM documents WHERE path = ? AND chunk_index = 0",
-                    (str(f),)
+                    (f_abs,)
                 ).fetchone()
 
                 if existing and existing["content_hash"] == content_hash:
                     skipped += 1
                     continue
 
-                db.execute("DELETE FROM documents WHERE path = ?", (str(f),))
+                # Delete all previous chunks for this file before re-indexing
+                db.execute("DELETE FROM documents WHERE lower(path) = ?", (f_abs.lower(),))
                 db.commit()
 
             chunks = chunk_code_structural(text, f.suffix)
@@ -342,11 +349,11 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                     chunks_embeddings.append(embedding)
 
                 with db_session() as db:
-                    cursor = db.execute(
+                    db.execute(
                         "INSERT INTO documents (path, content_hash, chunk_text, chunk_index, updated_at) VALUES (?, ?, ?, ?, ?)",
-                        (str(f), content_hash, chunk, i, now),
+                        (f_abs, content_hash, chunk, i, now),
                     )
-                    doc_id = cursor.lastrowid
+                    doc_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
                     if embedding:
                         try:
@@ -365,12 +372,12 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
             if symbols:
                 now_sym = datetime.now(timezone.utc).isoformat()
                 with db_session() as db:
-                    db.execute("DELETE FROM symbols WHERE file_path = ?", (str(f),))
+                    db.execute("DELETE FROM symbols WHERE file_path = ?", (f_abs,))
                     db.executemany(
                         "INSERT INTO symbols (file_path, symbol_name, symbol_type, line_no, signature, updated_at) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         [
-                            (str(f), s["name"], s["type"], s["line_no"], s["signature"], now_sym)
+                            (f_abs, s["name"], s["type"], s["line_no"], s["signature"], now_sym)
                             for s in symbols
                         ],
                     )
@@ -379,7 +386,7 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
 
             # Semantic Drift Detection (V3.3)
             if on_drift_detected and chunks_embeddings:
-                await _check_semantic_drift(str(f), chunks_embeddings, on_drift_detected)
+                await _check_semantic_drift(f_abs, chunks_embeddings, on_drift_detected)
 
             # Promotion Logic — full semantic ingest for files tagged # @memory
             # or with high drift score. Hash-gated to prevent re-promotion on
@@ -388,14 +395,14 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                 tagged = _has_memory_tag(text)
                 drift_score = 0.0
                 if not tagged and chunks_embeddings:
-                    drift_score = await _max_drift_score(str(f), chunks_embeddings)
+                    drift_score = await _max_drift_score(f_abs, chunks_embeddings)
                 should_promote = tagged or drift_score > PROMOTION_THRESHOLD
 
                 if should_promote:
                     with db_session() as db:
                         row = db.execute(
                             "SELECT promoted_hash FROM documents WHERE path = ? AND chunk_index = 0",
-                            (str(f),),
+                            (f_abs,),
                         ).fetchone()
                     already_promoted = row and row["promoted_hash"] == content_hash
 
@@ -403,13 +410,13 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                         reason = "# @memory tag" if tagged else f"drift={drift_score:.3f}"
                         log.info(f"📢 Promoting '{f.name}' to Ingest Agent ({reason})")
                         if asyncio.iscoroutinefunction(on_promotion_triggered):
-                            await on_promotion_triggered(str(f), text)
+                            await on_promotion_triggered(f_abs, text)
                         else:
-                            on_promotion_triggered(str(f), text)
+                            on_promotion_triggered(f_abs, text)
                         with db_session() as db:
                             db.execute(
                                 "UPDATE documents SET promoted_hash = ? WHERE path = ? AND chunk_index = 0",
-                                (content_hash, str(f)),
+                                (content_hash, f_abs),
                             )
                             db.commit()
 

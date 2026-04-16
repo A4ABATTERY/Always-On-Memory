@@ -151,8 +151,10 @@ class MemoryAgent:
             new_embedding = await embed_text(suggested, shutdown_event=_shutdown_event)
             if new_embedding:
                 with db_session() as db:
+                    # vec0 tables may not support OR REPLACE reliably; use DELETE+INSERT
+                    db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
                     db.execute(
-                        "INSERT OR REPLACE INTO vec_memories (memory_id, embedding) VALUES (?, vec_int8(?))",
+                        "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, vec_int8(?))",
                         (memory_id, serialize_int8(new_embedding)),
                     )
                     db.commit()

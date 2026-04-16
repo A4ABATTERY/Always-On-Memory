@@ -4,6 +4,7 @@ Memory Store Module — Encapsulates database operations for memories and consol
 
 import json
 import logging
+import os
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
@@ -140,12 +141,13 @@ def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
     )
     placeholders = ",".join("?" * len(_SYNTHESIS_SOURCES))
     with db_session() as db:
+        now_iso = datetime.now(timezone.utc).isoformat()
         rows = db.execute(
             f"SELECT * FROM memories WHERE consolidated = 0 "
-            f"AND (valid_to IS NULL OR valid_to > datetime('now')) "
-            f"AND source NOT IN ({placeholders}) "
+            f"AND (valid_to IS NULL OR valid_to > ?) "
+            f"AND (source IS NULL OR source NOT IN ({placeholders})) "
             f"ORDER BY created_at DESC LIMIT ?",
-            (*_SYNTHESIS_SOURCES, limit),
+            (*_SYNTHESIS_SOURCES, now_iso, limit),
         ).fetchall()
     memories = []
     for r in rows:
@@ -165,16 +167,17 @@ def read_unconsolidated_with_embeddings(limit: int = 100) -> List[Dict[str, Any]
     with db_session() as db:
         # Join memories with vec_memories to get the embeddings
         # We use vec_to_json to convert the int8 quantized vector back to a JSON array of floats
+        now_iso = datetime.now(timezone.utc).isoformat()
         rows = db.execute(
             """
             SELECT m.*, vec_to_json(v.embedding) as vector 
             FROM memories m
             JOIN vec_memories v ON m.id = v.memory_id
-            WHERE m.consolidated = 0 AND (m.valid_to IS NULL OR m.valid_to > datetime('now'))
+            WHERE m.consolidated = 0 AND (m.valid_to IS NULL OR m.valid_to > ?)
             ORDER BY m.created_at DESC
             LIMIT ?
             """,
-            (limit,)
+            (now_iso, limit)
         ).fetchall()
     
     results = []
@@ -472,7 +475,8 @@ def delete_memory(memory_id: int) -> Dict[str, Any]:
         if not row:
             return {"status": "not_found", "memory_id": memory_id}
         db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
+        if HAS_SQLITE_VEC:
+            db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
         db.commit()
     
     log.info(f"🗑️  Deleted memory #{memory_id}")
@@ -513,8 +517,9 @@ def update_link_status(memory_id: int, path: str, new_status: str) -> Dict[str, 
 
         connections = json.loads(row["connections"])
         updated = False
+        norm_path = os.path.normcase(os.path.abspath(path))
         for conn in connections:
-            if conn.get("type") == "file_link" and conn.get("path") == path:
+            if conn.get("type") == "file_link" and os.path.normcase(os.path.abspath(conn.get("path", ""))) == norm_path:
                 old_status = conn.get("status", "active")
                 if old_status != new_status:
                     conn["status"] = new_status
@@ -606,12 +611,13 @@ def get_memories_by_source(rel_path: str) -> List[int]:
         matching_ids = {r["id"] for r in rows}
 
         # Also find any structural file_links
-        rows2 = db.execute("SELECT id, connections FROM memories WHERE connections LIKE ?", (f'%{rel_path}%',)).fetchall()
+        rows2 = db.execute("SELECT id, connections FROM memories WHERE connections LIKE ?", (f'%{os.path.basename(rel_path)}%',)).fetchall()
+        norm_rel = os.path.normcase(os.path.abspath(rel_path))
         for r in rows2:
             try:
                 conns = json.loads(r["connections"])
                 for c in conns:
-                    if c.get("type") == "file_link" and c.get("path") == rel_path:
+                    if c.get("type") == "file_link" and os.path.normcase(os.path.abspath(c.get("path", ""))) == norm_rel:
                         matching_ids.add(r["id"])
                         break
             except json.JSONDecodeError:

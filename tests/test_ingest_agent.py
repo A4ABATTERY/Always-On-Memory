@@ -39,8 +39,17 @@ class TestIngestAgentSmoke(unittest.IsolatedAsyncioTestCase):
         from agents_factory import build_agents
         (ingest_agent, *_) = build_agents()
 
+        # Version-safe tool introspection (PydanticAI 1.x / 0.x compatibility)
         ts = getattr(ingest_agent, '_function_toolset', None)
-        tool_names = set(ts.tools.keys()) if ts is not None and hasattr(ts, 'tools') else set()
+        if ts is not None and hasattr(ts, 'tools'):
+            tool_names = set(ts.tools.keys())
+        else:
+            # Fallback for alternative internal tool structures
+            toolsets = getattr(ingest_agent, '_toolsets', [])
+            tool_names = set()
+            for toolset in toolsets:
+                if hasattr(toolset, 'tools'):
+                    tool_names.update(toolset.tools.keys())
 
         self.assertIn(
             "store_memory",

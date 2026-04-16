@@ -34,6 +34,12 @@ def get_db() -> sqlite3.Connection:
         db.enable_load_extension(False)
     return db
 
+def reset_engine() -> None:
+    """Flush any cached state to allow env overrides to take effect."""
+    # Since we use sqlite3.connect() directly in get_db, there is no cached engine
+    # to reset, but we keep this as a placeholder for consistency with other layers.
+    pass
+
 @contextlib.contextmanager
 def db_session() -> Generator[sqlite3.Connection, None, None]:
     """Context manager that ensures the database connection is closed."""
