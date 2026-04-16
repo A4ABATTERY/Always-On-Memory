@@ -1,6 +1,7 @@
 # Autonomous System Loops
 
-AOM v3 is designed to be "Always-On" and self-maintaining. It achieves this through several background loops that run concurrently to optimize, consolidate, and verify the memory system.
+AOM v3 is designed to be "Always-On" and self-maintaining. It| `agent.py` | Entry point; orchestrates all background loops. Powered by `asyncio.run()` for robust lifecycle management. |
+memory system.
 
 ## 1. Adversarial Consolidation Loop
 ### The "Dreaming" Cycle
@@ -26,7 +27,8 @@ AOM v3 is designed to be "Always-On" and self-maintaining. It achieves this thro
 ### The "Self-Healing" Cycle
 - **Interval**: Real-time (via file system watchers) and periodic scans.
 - **Process**:
-    - **Librarian Scan**: Watches the project code for any modifications.
+    - **Librarian Scan**: Watches project code using an optimized recursive walker (`os.scandir`) that proactively prunes ignored branches (e.g. `node_modules`).
+    - **Background Execution**: Modification checks run in background threads to prevent event loop blocking on slow file systems (e.g., Windows/OneDrive).
     - **Drift Detection**: When a file changes, the Librarian calculates the new embedding and compares it to linked `MemCubes`.
     - **Sync Queueing**: If semantic drift exceeds the `DRIFT_THRESHOLD` (e.g., 0.18), a task is pushed to the **Sync Queue**.
     - **Sync Auditor Execution**: The Auditor analyzes the code change and updates the link status:
@@ -44,7 +46,7 @@ AOM v3 is designed to be "Always-On" and self-maintaining. It achieves this thro
 ### The "Ingestion & Update Tracking" Cycle
 - **Interval**: Real-time poll (every 5s).
 - **Process**:
-    - **Recursive Scan**: Deep scans the `inbox/` for new or modified nested files.
+    - **Recursive Scan**: Deep scans the `inbox/` using the optimized `os.scandir` walker for new or modified nested files.
     - **Update Tracking**: Compares MD5 content hashes against stored `processed_files`.
     - **Semantic Invalidation**: If a known file is modified:
         - Prevents contradictions by immediately marking old linked memories as superseded (`valid_to = now()`) and transitioning connections to `historical_trace`.

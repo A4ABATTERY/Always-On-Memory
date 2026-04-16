@@ -351,6 +351,7 @@ async def run_mcp_server(
         log_level="info",
         lifespan="on",     # REQUIRED: initialises StreamableHTTPSessionManager
         access_log=False,  # AOM uses its own logging
+        install_handlers=False,  # Let Agent.py handle signals
     )
     server = uvicorn.Server(mcp_uvicorn_config)
 

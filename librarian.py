@@ -150,34 +150,46 @@ def write_skill_file(skill_name: str, content: str) -> Dict[str, Any]:
     return {"status": "saved", "path": str(skill_path), "skill_name": clean_name}
 
 def _get_latest_mtime(dirs: List[str]) -> float:
-    """Find the max modification time across all relevant files."""
+    """Find the max modification time across all relevant files using os.scandir for speed."""
     extra_ignores = {d.strip(' \t\n\r"\'') for d in IGNORE_DIRS.split(",") if d.strip()}
     all_skip = SKIP_DIRS | extra_ignores
     abs_extra = {os.path.normcase(os.path.abspath(e)) for e in extra_ignores if os.path.isabs(e)}
 
     latest_mtime = 0.0
+
+    def _walk_recursive(current_path: str) -> float:
+        current_max = 0.0
+        try:
+            # os.scandir is much faster than Path.rglob as it doesn't walk ignored branches
+            with os.scandir(current_path) as it:
+                for entry in it:
+                    # Early skip: dotfiles or ignored names (node_modules, .git, etc.)
+                    if entry.name.startswith(".") or entry.name in all_skip:
+                        continue
+                    
+                    entry_abs = os.path.normcase(entry.path)
+                    # Absolute ignore check
+                    if any(entry_abs == ignore or entry_abs.startswith(ignore + os.sep) for ignore in abs_extra):
+                        continue
+                    
+                    if entry.is_dir(follow_symlinks=False):
+                        current_max = max(current_max, _walk_recursive(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        _, ext = os.path.splitext(entry.name)
+                        if ext.lower() in CODE_EXTENSIONS:
+                            # Verification: stat() is called on the DirEntry (often cached by OS)
+                            mtime = entry.stat().st_mtime
+                            if mtime > current_max:
+                                current_max = mtime
+        except (OSError, PermissionError):
+            pass
+        return current_max
+
     for dir_path in dirs:
-        folder = Path(os.path.normpath(os.path.abspath(os.path.expanduser(dir_path))))
-        if not folder.exists():
-            continue
-
-        for f in folder.rglob("*"):
-            if f.is_dir() or f.suffix.lower() not in CODE_EXTENSIONS or is_binary_file(f):
-                continue
-
-            if any(p.startswith(".") or p in all_skip for p in f.relative_to(folder).parts):
-                continue
-
-            f_abs = os.path.normcase(os.path.abspath(str(f)))
-            if any(f_abs.startswith(ignore + os.sep) or f_abs == ignore for ignore in abs_extra):
-                continue
+        root = os.path.normpath(os.path.abspath(os.path.expanduser(dir_path)))
+        if os.path.isdir(root):
+            latest_mtime = max(latest_mtime, _walk_recursive(root))
             
-            try:
-                mtime = f.stat().st_mtime
-                if mtime > latest_mtime:
-                    latest_mtime = mtime
-            except (OSError, ValueError):
-                continue
     return latest_mtime
 
 async def _check_semantic_drift(path: str, new_embeddings: List[List[float]], on_drift_detected: Any):
@@ -454,7 +466,8 @@ async def librarian_loop(on_drift_detected: Any = None, on_promotion_triggered: 
     
     while not get_shutdown_event().is_set():
         try:
-            latest_mtime = _get_latest_mtime(dirs)
+            # Shift FS-heavy mtime check to a background thread to keep loop responsive
+            latest_mtime = await asyncio.to_thread(_get_latest_mtime, dirs)
             if latest_mtime > current_max_mtime:
                 log.info(f"📚 Librarian: detected changes (mtime {latest_mtime} > {current_max_mtime}). Starting debounce timer.")
                 last_change_time = time.time()

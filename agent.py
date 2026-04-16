@@ -8,9 +8,10 @@ import argparse
 import asyncio
 import logging
 import shutil
-import signal
-import time
 import hashlib
+import signal
+import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -794,7 +795,12 @@ async def main_async(args):
 
     try:
         await _shutdown_event.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.info("🛑 Shutdown signal received.")
+        if _shutdown_event:
+            _shutdown_event.set()
     finally:
+        log.info("🧹 Cleaning up background tasks...")
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -820,23 +826,10 @@ def main():
     )
     args = parser.parse_args()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    def _signal_handler(sig=None):
-        if _shutdown_event:
-            _shutdown_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
-
     try:
-        loop.run_until_complete(main_async(args))
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        if _shutdown_event:
-            _shutdown_event.set()
-    finally:
-        loop.close()
+        asyncio.run(main_async(args))
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
