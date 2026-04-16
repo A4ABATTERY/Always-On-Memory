@@ -151,24 +151,25 @@ def write_skill_file(skill_name: str, content: str) -> Dict[str, Any]:
 
 def _get_latest_mtime(dirs: List[str]) -> float:
     """Find the max modification time across all relevant files."""
-    extra_ignores = {d.strip() for d in IGNORE_DIRS.split(",") if d.strip()}
+    extra_ignores = {d.strip(' \t\n\r"\'') for d in IGNORE_DIRS.split(",") if d.strip()}
     all_skip = SKIP_DIRS | extra_ignores
+    abs_extra = {os.path.normcase(os.path.abspath(e)) for e in extra_ignores if os.path.isabs(e)}
 
     latest_mtime = 0.0
     for dir_path in dirs:
-        # Normalize dir_path for Windows consistency
         folder = Path(os.path.normpath(os.path.abspath(os.path.expanduser(dir_path))))
         if not folder.exists():
             continue
-            
+
         for f in folder.rglob("*"):
-            # Ensure f is an absolute, normalized string path
-            f_abs = os.path.normcase(os.path.abspath(str(f)))
-            if os.path.isdir(f_abs) or Path(f_abs).suffix.lower() not in CODE_EXTENSIONS or is_binary_file(f_abs):
+            if f.is_dir() or f.suffix.lower() not in CODE_EXTENSIONS or is_binary_file(f):
                 continue
-            
-            parts = f.parts
-            if any(p.startswith(".") or p in all_skip for p in parts):
+
+            if any(p.startswith(".") or p in all_skip for p in f.relative_to(folder).parts):
+                continue
+
+            f_abs = os.path.normcase(os.path.abspath(str(f)))
+            if any(f_abs.startswith(ignore + os.sep) or f_abs == ignore for ignore in abs_extra):
                 continue
             
             try:
@@ -291,8 +292,9 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
         if not folder.is_dir():
             continue
 
-        extra_ignores = {d.strip() for d in IGNORE_DIRS.split(",") if d.strip()}
+        extra_ignores = {d.strip(' \t\n\r"\'') for d in IGNORE_DIRS.split(",") if d.strip()}
         all_skip = SKIP_DIRS | extra_ignores
+        abs_extra = {os.path.normcase(os.path.abspath(e)) for e in extra_ignores if os.path.isabs(e)}
 
         for f in folder.rglob("*"):
             if get_shutdown_event().is_set():
@@ -300,11 +302,15 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
 
             if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
                 continue
-            
-            # Only skip hidden files/dirs relative to the watch root
+
             rel_parts = f.relative_to(folder).parts
             if any(p.startswith(".") or p in all_skip for p in rel_parts):
                 continue
+
+            f_abs = os.path.normcase(os.path.abspath(str(f)))
+            if any(f_abs.startswith(ignore + os.sep) or f_abs == ignore for ignore in abs_extra):
+                continue
+            
             if is_binary_file(f):
                 continue
 
@@ -433,7 +439,7 @@ async def librarian_loop(on_drift_detected: Any = None, on_promotion_triggered: 
         log.warning("📚 Librarian: sqlite-vec not found. Skipping vector indexer.")
         return
 
-    dirs = [d.strip() for d in WATCH_DIRS.split(",") if d.strip()]
+    dirs = [d.strip(' \t\n\r"\'') for d in WATCH_DIRS.split(",") if d.strip()]
     
     # Resolve and expand all dirs once at startup
     dirs = [str(Path(d).expanduser().resolve()) for d in dirs]
