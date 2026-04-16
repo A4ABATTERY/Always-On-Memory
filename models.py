@@ -49,13 +49,43 @@ class MemCube(BaseModel):
         """Export cube in a portable format for cross-platform migration."""
         return self.model_dump(exclude={"id", "composite_score", "recall_reason"})
 
-class SynthesisResult(BaseModel):
-    """Structured output from the Memory Synthesis Generator agent."""
-    model_config = ConfigDict(frozen=True)
-    summary: str = Field(..., description="Concise high-level summary")
-    insight: str = Field(..., description="Deep synthesized insight preserving all technical details")
-    source_ids: List[int] = Field(..., description="List of integer IDs from source memories")
-    connections: List[Dict[str, Any]] = Field(default_factory=list, description="Structural links (memory_link, file_link)")
+class TopicSynthesis(BaseModel):
+    """
+    An atomic, topically-bound insight synthesized from a semantic sub-cluster
+    of source memories. One TopicSynthesis is created per identified theme.
+    """
+    topic_name: str = Field(
+        ...,
+        description="Short, descriptive category name (e.g., 'Backend Auth Infrastructure', 'Frontend RBAC', 'E2E Test Suite Status')"
+    )
+    summary: str = Field(
+        ...,
+        description="Concise 1-2 sentence high-level summary of this specific topic only."
+    )
+    insight: str = Field(
+        ...,
+        description="Deep, full-fidelity synthesized insight for this topic. ALL technical details, entity names, and decisions from the source memories MUST be preserved."
+    )
+    source_ids: List[int] = Field(
+        ...,
+        description="The integer memory IDs that were used to construct THIS topic's insight. Each ID should appear in exactly one TopicSynthesis."
+    )
+    connections: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structural links (file_link, memory_link) relevant to this specific topic."
+    )
+
+
+class MultiSynthesisResult(BaseModel):
+    """
+    The top-level output from the Generator Agent. Encapsulates all topics
+    identified in a consolidation batch as a list of independent TopicSynthesis objects.
+    No two TopicSynthesis entries should cover substantially the same theme.
+    """
+    insights: List[TopicSynthesis] = Field(
+        ...,
+        description="The distinct, topically-isolated insights generated from the source memories."
+    )
 
 class AuditResult(BaseModel):
     """Structured output from the Memory-Code Link Integrity Auditor agent."""
@@ -65,13 +95,18 @@ class AuditResult(BaseModel):
     suggested_update: Optional[str] = Field(None, description="Corrected version of the insight if status is REPAIR")
 
 class EvalResult(BaseModel):
-    """Structured output from the Adversarial Evaluator agent."""
+    """
+    Updated grading schema for the Adversarial Evaluator agent.
+    'completeness' has been REPLACED by 'source_coverage' (objective, enforceable)
+    and 'topic_cohesion' has been ADDED to penalize poor cluster boundaries.
+    """
     model_config = ConfigDict(frozen=True)
-    score: float = Field(..., ge=0.0, le=1.0)
-    fidelity: float = Field(..., ge=0.0, le=1.0, description="Did the synthesis preserve all source facts?")
-    completeness: float = Field(..., ge=0.0, le=1.0, description="Were any source facts omitted?")
-    redundancy_removed: float = Field(..., ge=0.0, le=1.0, description="Were duplicates properly merged?")
-    feedback: str = Field("", description="Specific feedback for the Generator to improve")
+    score: float = Field(..., ge=0.0, le=1.0, description="Overall quality score.")
+    fidelity: float = Field(..., ge=0.0, le=1.0, description="Did the synthesis accurately preserve source facts without hallucination?")
+    source_coverage: float = Field(..., ge=0.0, le=1.0, description="Were all source memory IDs utilized in at least one TopicSynthesis?")
+    topic_cohesion: float = Field(..., ge=0.0, le=1.0, description="Are the generated topics sufficiently distinct with sharp thematic boundaries?")
+    redundancy_removed: float = Field(..., ge=0.0, le=1.0, description="Were overlapping facts within a topic merged efficiently?")
+    feedback: str = Field("", description="Actionable feedback for the Generator specifying orphaned memories or overlapping topics.")
 
 class Consolidation(BaseModel):
     """Represents a consolidation of multiple memories."""

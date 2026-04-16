@@ -556,6 +556,34 @@ def get_all_links() -> Dict[str, Any]:
                     })
     return {"links": links, "count": len(links)}
 
+def mark_memories_consolidated(memory_ids: List[int]) -> Dict[str, Any]:
+    """
+    Force-mark a list of memory IDs as consolidated=1.
+    Used by the Orphan Sweeper to prevent dropped memories from causing
+    infinite re-ingestion loops in subsequent consolidation cycles.
+
+    Args:
+        memory_ids: List of integer memory IDs to mark as consolidated.
+
+    Returns:
+        Dict with status and count of affected rows.
+    """
+    if not memory_ids:
+        return {"status": "no_op", "marked": 0}
+
+    with db_session() as db:
+        placeholders = ",".join("?" * len(memory_ids))
+        cursor = db.execute(
+            f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})",
+            memory_ids
+        )
+        db.commit()
+
+    count = cursor.rowcount
+    log.info(f"🔒 Orphan sweeper: marked {count} memories as consolidated (IDs: {memory_ids}).")
+    return {"status": "marked", "marked": count}
+
+
 def get_memories_by_source(rel_path: str) -> List[int]:
     """Find all memories associated with a specific file path."""
     with db_session() as db:

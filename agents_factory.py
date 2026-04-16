@@ -10,7 +10,7 @@ from memory_store import (
     store_memory, read_unconsolidated_memories, 
     read_all_memories, read_consolidation_history, read_memory_partition
 )
-from models import SynthesisResult, AuditResult, EvalResult
+from models import MultiSynthesisResult, AuditResult, EvalResult
 
 # ─── Rate-Limited Model Helper ────────────────────────────────
 
@@ -61,7 +61,7 @@ Your goal is to transform raw multifaceted data into a standardized MemCube form
 """
 
 GENERATOR_SYSTEM_PROMPT = """
-You are a Memory Synthesis Generator. Your task is to take a cluster of raw, fragmented memories and synthesize them into a single, high-fidelity "Insight."
+You are a Memory Synthesis Generator. Your task is to take a cluster of raw, fragmented memories and extract distinct thematic knowledge units with full fidelity.
 
 ### ─── SYNTHESIS CONSTRAINTS ───
 
@@ -76,40 +76,80 @@ You are a Memory Synthesis Generator. Your task is to take a cluster of raw, fra
     *   **CRITICAL**: Do NOT invent or hypothesize file paths. Only use paths returned by tools or found in source metadata.
 4.  **Feedback Integration**: If `feedback` is provided from a previous audit, you MUST address every criticism specifically.
 
-### ─── GOLDEN SAMPLE (Example Output) ───
+### ─── MULTI-THEMATIC EXTRACTION PROTOCOL ───
 
-*   **Source**: "User added JWT auth" (ID 12), "JWT uses RS256" (ID 13).
-*   **Synthesis**:
-    *   **Summary**: Implemented JWT Authentication using RS256.
-    *   **Insight**: The authentication system was upgraded to use JSON Web Tokens (JWT). The implementation specifically uses the RS256 (RSA Signature with SHA-256) algorithm for secure signing. This replaces the previous basic auth.
-    *   **Source IDs**: [12, 13]
-    *   **Connections**: [{"type": "file_link", "path": "auth.py"}]
+You are NOT summarizing. You are EXTRACTING distinct thematic knowledge units.
 
-**MANDATE**: Produce a `SynthesisResult`. Do NOT call storage tools.
+STEP 1 – TOPIC IDENTIFICATION:
+  Scan the full list of source memories and group them into 2–5 distinct thematic clusters.
+  Examples of valid topic boundaries:
+    - "Backend Authentication & Middleware" vs. "Frontend State Management"
+    - "Database Schema Migrations" vs. "E2E Test Suite Configuration"
+  Never combine unrelated technical domains into a single TopicSynthesis.
+  For simple batches with one clear theme, a single insight is acceptable.
+
+STEP 2 – HISTORICAL DEDUPLICATION (MANDATORY, TWO-TOOL CHECK):
+  Before finalizing ANY insight, you MUST:
+  a) Call `read_consolidation_history` to retrieve the last 30 consolidated summaries.
+  b) Call `search_documents` using keyword terms (e.g., function names, class names, component names)
+     from your proposed insight to check if similar knowledge already exists in the codebase index.
+
+  Decision rules:
+  - If an insight is PURELY REDUNDANT (exact same facts, no new information) → OMIT IT.
+  - If an insight is an UPDATE or CONTRADICTION of an existing one → include it explicitly,
+    stating "UPDATE: [previous claim] is now [new claim]" in the insight text.
+  - If an insight is a purely NEW TOPIC → include it without restriction.
+
+STEP 3 – SOURCE ID ASSIGNMENT (STRICT):
+  Every submitted source memory ID MUST appear in exactly one TopicSynthesis.source_ids.
+  Do NOT leave any memory unassigned. If a memory does not clearly belong to a major topic,
+  create a "Miscellaneous / Uncategorized" topic for these fragments rather than omitting them.
+
+STEP 4 – ZERO-LOSS WITHIN TOPIC:
+  Within each TopicSynthesis, the Zero-Loss Mandate applies: every unique technical detail,
+  entity name, version number, and architectural decision from the source memories assigned
+  to that topic MUST be preserved in the insight text.
+
+MANDATE: Output a `MultiSynthesisResult`. Do NOT call storage tools.
 """
 
 EVALUATOR_SYSTEM_PROMPT = """
-You are a Memory Synthesis Evaluator. Your goal is to ensure high-fidelity, complete, and non-redundant insights. You are a "Grounded Critic" who is rigorous but fair.
+You are a Memory Synthesis Evaluator. Your goal is to ensure high-fidelity, topically distinct, and non-redundant insights. You are a "Grounded Critic" who is rigorous but fair.
 
-### ─── GRADING RUBRIC (0.0 - 1.0) ───
+### ─── GRADING RUBRIC (0.0 – 1.0) — UPDATED ───
 
-*   **FIDELITY (Weight 0.35)**: Did the synthesis accurately reflect the source facts? Are there any inventions or hallucinations? (Subtract 0.2 for every minor hallucination).
-*   **COMPLETENESS (Weight 0.35)**: Were ANY unique facts or technical details from the source memories omitted? (Subtract 0.2 per missing detail).
-*   **REDUNDANCY_REMOVED (Weight 0.30)**: Were overlapping facts merged efficiently? (Subtract 0.1 for every redundant phrase).
+Equation: score = (fidelity × 0.35) + (source_coverage × 0.35) + (topic_cohesion × 0.15) + (redundancy_removed × 0.15)
 
-**Equation**: Score = (fidelity * 0.35) + (completeness * 0.35) + (redundancy_removed * 0.30)
+• FIDELITY (0.35): Did the synthesis accurately preserve source facts? Penalize hallucinations.
+  (Subtract 0.2 per invented fact, 0.1 per distortion)
 
-### ─── FEEDBACK MANDATES ───
+• SOURCE_COVERAGE (0.35): Were ALL submitted source memory IDs used in at least one TopicSynthesis?
+  Map source_ids across all generated insights against the submitted memory list.
+  (Subtract 0.25 per orphaned memory that was simply ignored)
+
+• TOPIC_COHESION (0.15): Are the generated TopicSynthesis entries thematically distinct?
+  If two insights cover the same logical domain (e.g., "API Auth" and "JWT Routing"),
+  they represent poor clustering.
+  (Subtract 0.1 per pair of substantially overlapping topics)
+
+• REDUNDANCY_REMOVED (0.15): Within a single topic, were repeated facts merged cleanly?
+  (Subtract 0.1 per redundant phrase surviving inside one insight block)
+
+### ─── FEEDBACK MANDATE ───
 
 *   **Grounded Criticism**: Only identify flaws that ALREADY EXIST in the synthesis. Do NOT invent problems to satisfy a quota.
-*   **Acceptance Protocol**: If a synthesis is near-perfect (Score > 0.95), you must accept it and provide a brief justification (e.g., "All source facts preserved, no redundancy").
-*   **Actionable Items**: If flaws exist, list exactly what is missing or what word is redundant. Use the format: "CRITIQUE: [Detail] was in Memory ID [X] but is missing in the synthesis."
+*   **Acceptance Protocol**: If a synthesis is near-perfect (Score > 0.95), you must accept it and provide a brief justification.
+For any score below 0.85, your feedback MUST:
+1. Name the specific orphaned memory IDs (if source_coverage failed).
+2. Name the two overlapping topic_names (if topic_cohesion failed).
+3. Quote the repeated phrase verbatim (if redundancy failed).
+Vague feedback like "some details were omitted" is not acceptable.
 
 ### ─── FAILED SAMPLE (Example of what to penalize) ───
 
 *   **Source**: Memory 1: "API uses OAuth2." Memory 2: "OAuth2 requires client secret."
-*   **Synthesis**: "The system uses API Authentication."
-*   **Critique**: Score 0.4. COMPLETENESS Failure: Synthesis missed "OAuth2" and "client secret." Too vague.
+*   **Synthesis**: single TopicSynthesis covering only Memory 1, Memory 2 unassigned.
+*   **Critique**: Score 0.5. SOURCE_COVERAGE Failure: Memory ID 2 was not assigned to any TopicSynthesis.
 
 **MANDATE**: Produce an `EvalResult`.
 """
@@ -200,9 +240,9 @@ You are a Memory-Code Link Integrity Auditor. Your task is to verify if a Memory
 
 def build_agents() -> Tuple[
     Agent[None, str],
-    Agent[None, SynthesisResult],
+    Agent[None, MultiSynthesisResult],
     Agent[None, EvalResult],
-    Agent[None, SynthesisResult],
+    Agent[None, MultiSynthesisResult],
     Agent[None, EvalResult],
     Agent[None, str],
     Agent[None, str],
@@ -223,9 +263,9 @@ def build_agents() -> Tuple[
     # Periodic consolidation (lite)
     memory_generator_lite = Agent(
         lite_model,
-        output_type=SynthesisResult,
+        output_type=MultiSynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
-        tools=[read_unconsolidated_memories, search_documents, read_document],
+        tools=[read_unconsolidated_memories, search_documents, read_document, read_consolidation_history],
     )
     memory_evaluator_lite = Agent(
         lite_model,
@@ -237,10 +277,10 @@ def build_agents() -> Tuple[
     # Deep/Dream consolidation (smart)
     memory_generator_smart = Agent(
         smart_model,
-        output_type=SynthesisResult,
+        output_type=MultiSynthesisResult,
         system_prompt=GENERATOR_SYSTEM_PROMPT,
         tools=[
-            read_all_memories, search_documents, read_document
+            read_all_memories, search_documents, read_document, read_consolidation_history
         ],
     )
     memory_evaluator_smart = Agent(

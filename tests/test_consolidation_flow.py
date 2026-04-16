@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from agent import MemoryAgent
 from database import init_db, db_session
 from memory_store import store_memory
-from models import SynthesisResult, EvalResult
+from models import MultiSynthesisResult, TopicSynthesis, EvalResult
 
 _DUMMY_VECTOR = [0.01] * 3072
 
@@ -49,35 +49,40 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
         # 1. Seed some unconsolidated memories
         m1 = await store_memory("Fact 1: London is cold", "London cold", [], ["weather"], 0.5)
         m2 = await store_memory("Fact 2: London has a bridge", "London bridge", [], ["infrastructure"], 0.5)
-        
+
         # Verify they are unconsolidated
         with db_session() as db:
             count = db.execute("SELECT COUNT(*) as c FROM memories WHERE consolidated = 0").fetchone()["c"]
             self.assertEqual(count, 2)
 
-        # 2. Mock Agent Responses
-        # Generator synthesis
-        gen_data = SynthesisResult(
-            summary="London summary",
-            insight="London is cold and has a bridge.",
-            source_ids=[m1["memory_id"], m2["memory_id"]],
-            connections=[{"from_id": m1["memory_id"], "to_id": m2["memory_id"], "relationship": "same_city"}]
+        # 2. Mock Agent Responses — MultiSynthesisResult with one TopicSynthesis
+        gen_data = MultiSynthesisResult(
+            insights=[
+                TopicSynthesis(
+                    topic_name="London Facts",
+                    summary="London summary",
+                    insight="London is cold and has a bridge.",
+                    source_ids=[m1["memory_id"], m2["memory_id"]],
+                    connections=[{"type": "memory_link", "from_id": m1["memory_id"], "to_id": m2["memory_id"], "relationship": "same_city"}]
+                )
+            ]
         )
         self.agent.generator_lite.run.return_value = MagicMock(output=gen_data)
-        
-        # Evaluator approval
+
         eval_data = EvalResult(
             score=0.9,
             feedback="Good",
             fidelity=1.0,
-            completeness=1.0,
+            source_coverage=1.0,
+            topic_cohesion=1.0,
             redundancy_removed=1.0
         )
         self.agent.evaluator_lite.run.return_value = MagicMock(output=eval_data)
 
         # 3. Trigger Consolidation
         msg = await self.agent.consolidate()
-        self.assertIn("Consolidated 2 memories into Insight Cube", msg)
+        self.assertIn("Consolidated 2 memories into", msg)
+        self.assertIn("Insight Cube(s)", msg)
 
         # 4. Verify Database State
         with db_session() as db:
@@ -85,16 +90,16 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
             unconsolidated_count = db.execute("SELECT COUNT(*) as c FROM memories WHERE consolidated = 0").fetchone()["c"]
             # We expect 1 (the NEW Insight cube)
             self.assertEqual(unconsolidated_count, 1)
-            
+
             # Check that 2 are marked as consolidated
             consolidated_count = db.execute("SELECT COUNT(*) as c FROM memories WHERE consolidated = 1").fetchone()["c"]
             self.assertEqual(consolidated_count, 2)
-            
+
             # Check Consolidation record
             cons = db.execute("SELECT * FROM consolidations").fetchone()
             self.assertIsNotNone(cons)
             self.assertEqual(cons["summary"], "London summary")
-            
+
             # Check the new Insight Cube
             insight_cube = db.execute("SELECT * FROM memories WHERE topics LIKE '%consolidated-insight%'").fetchone()
             self.assertIsNotNone(insight_cube)
@@ -105,13 +110,13 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
         """Test that memories marked valid_to < now are excluded from AutoDream read ranges."""
         m1 = await store_memory("Valid fact", "Valid", [], ["test"], 0.5)
         m2 = await store_memory("Superseded fact", "Invalid", [], ["test"], 0.5)
-        
+
         from memory_store import update_memory_validity, read_unconsolidated_memories
         update_memory_validity(m2["memory_id"], datetime.now(timezone.utc).isoformat())
 
         res = read_unconsolidated_memories(limit=10)
         summaries = [m["summary"] for m in res["memories"]]
-        
+
         self.assertIn("Valid", summaries)
         self.assertNotIn("Invalid", summaries)
 

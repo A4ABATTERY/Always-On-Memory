@@ -23,7 +23,7 @@ from config import (
     get_shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
     HAS_SQLITE_VEC, INBOX_DIR
 )
-from models import SynthesisResult, AuditResult, EvalResult
+from models import MultiSynthesisResult, AuditResult, EvalResult
 
 # Module-level reference — set to the real event at the start of main_async()
 _shutdown_event: Optional[asyncio.Event] = None
@@ -31,7 +31,8 @@ from database import init_db, db_session
 from agents_factory import build_agents
 from utils import retry_with_backoff
 from memory_store import (
-    read_all_memories
+    read_all_memories,
+    mark_memories_consolidated,
 )
 from librarian import librarian_loop
 from server import build_http
@@ -76,9 +77,9 @@ class MemoryAgent:
         ) = build_agents()
         
         self.ingest_agent: Agent[None, str] = self.ingest_agent
-        self.generator_lite: Agent[None, SynthesisResult] = self.generator_lite
+        self.generator_lite: Agent[None, MultiSynthesisResult] = self.generator_lite
         self.evaluator_lite: Agent[None, EvalResult] = self.evaluator_lite
-        self.generator_smart: Agent[None, SynthesisResult] = self.generator_smart
+        self.generator_smart: Agent[None, MultiSynthesisResult] = self.generator_smart
         self.evaluator_smart: Agent[None, EvalResult] = self.evaluator_smart
         self.query_agent: Agent[None, str] = self.query_agent
         self.self_improvement_agent: Agent[None, str] = self.self_improvement_agent
@@ -227,7 +228,7 @@ class MemoryAgent:
 
     async def adversarial_consolidation(
         self,
-        generator: Agent[None, SynthesisResult],
+        generator: Agent[None, MultiSynthesisResult],
         evaluator: Agent[None, EvalResult],
         raw_memories_text: str,
         max_attempts: int = 3,
@@ -238,19 +239,19 @@ class MemoryAgent:
         """
         feedback = "No feedback yet. Generate the initial synthesis."
         for attempt in range(max_attempts):
-            # Step 1: Generator creates synthesis (Structured Result)
+            # Step 1: Generator creates multi-topic synthesis (Structured Result)
             gen_result = await retry_with_backoff(
                 generator.run,
                 f"Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
                 shutdown_event=_shutdown_event,
             )
-            draft_data: SynthesisResult = gen_result.output
-            
+            draft_data: MultiSynthesisResult = gen_result.output
+
             # Step 2: Evaluator grades it (Structured Result)
             eval_result = await retry_with_backoff(
                 evaluator.run,
                 f"Source memories:\n{raw_memories_text}\n\nDraft synthesis:\n{draft_data.model_dump_json()}\n\n"
-                "Grade strictly. Output JSON ONLY with score, fidelity, completeness, redundancy_removed, feedback.",
+                "Grade strictly. Output JSON ONLY with: score, fidelity, source_coverage, topic_cohesion, redundancy_removed, feedback.",
                 shutdown_event=_shutdown_event,
             )
             
@@ -269,43 +270,65 @@ class MemoryAgent:
         log.warning(f"❌ Consolidation failed after {max_attempts} attempts.")
         raise Exception("Consolidation quality threshold not met after max attempts.")
 
+    def _cleanup_orphans(self, original_ids: set, processed_ids: set):
+        """Force-mark memories the LLM dropped from all source_ids to prevent infinite re-ingestion loops."""
+        orphans = original_ids - processed_ids
+        if orphans:
+            log.warning(f"Orphan sweeper: {len(orphans)} memories marked consolidated to prevent loops. IDs: {orphans}")
+            mark_memories_consolidated(list(orphans))
+
     async def consolidate(self) -> str:
         log.info("🔄 Running periodic adversarial consolidation...")
         from memory_store import read_unconsolidated_memories, store_consolidation, store_memory
         data = read_unconsolidated_memories()
         if data["count"] < 2:
             return "Nothing to consolidate"
-        
+
         import json
         memories_text = json.dumps(data["memories"], indent=2)
-        
+
+        # Caller-scoped context variables for the standard consolidation tier
+        base_importance = 0.8
+        base_topics = ["consolidated-insight"]
+        base_source = "adversarial-consolidation"
+
         try:
             # 1. Run adversarial loop
             result_data = await self.adversarial_consolidation(
                 self.generator_lite, self.evaluator_lite, memories_text
             )
-            
-            # 2. Persist consolidation record (marks old memories as consolidated)
-            store_consolidation(
-                source_ids=result_data["source_ids"],
-                summary=result_data["summary"],
-                insight=result_data["insight"],
-                connections=result_data.get("connections", [])
-            )
-            
-            # 3. Create new Insight MemCube
-            new_cube = await store_memory(
-                raw_text=result_data["insight"],
-                summary=result_data["summary"],
-                entities=[], # Could be extracted if needed
-                topics=["consolidated-insight"],
-                connections=result_data.get("connections", []),
-                importance_score=0.8,
-                sector="semantic",
-                source="adversarial-consolidation"
-            )
-            
-            return f"Consolidated {len(result_data['source_ids'])} memories into Insight Cube #{new_cube['memory_id']}"
+
+            # 2. Track which source IDs were submitted so orphans can be swept
+            original_source_ids = set(m["id"] for m in data["memories"])
+            processed_source_ids = set()
+            insights_created = 0
+
+            # 3. Persist one consolidation record + one Insight Cube per topic
+            for topic in result_data.get("insights", []):
+                if not topic.get("source_ids"):
+                    continue
+
+                processed_source_ids.update(topic["source_ids"])
+                store_consolidation(
+                    source_ids=topic["source_ids"],
+                    summary=topic["summary"],
+                    insight=topic["insight"],
+                    connections=topic.get("connections", []),
+                )
+                await store_memory(
+                    raw_text=topic["insight"],
+                    summary=f"[{topic['topic_name']}] {topic['summary']}",
+                    entities=[],
+                    topics=base_topics + [topic["topic_name"]],
+                    connections=topic.get("connections", []),
+                    importance_score=base_importance,
+                    sector="semantic",
+                    source=base_source,
+                )
+                insights_created += 1
+
+            self._cleanup_orphans(original_source_ids, processed_source_ids)
+            return f"Consolidated {len(original_source_ids)} memories into {insights_created} Insight Cube(s)"
         except Exception as e:
             log.error(f"Adversarial consolidation failed: {e}")
             return f"Consolidation failed: {e}"
@@ -331,40 +354,56 @@ class MemoryAgent:
         log.info(f"🧠 Running deep adversarial re-consolidation using {SMART_MODEL}...")
         from memory_store import store_consolidation, store_memory
         data = read_all_memories()
-        
+
         import json
         memories_text = json.dumps(data["memories"], indent=2)
-        
+
+        # Caller-scoped context variables for the deep reconsolidation tier
+        base_importance = 0.9
+        base_topics = ["deep-insight", "architectural-consensus"]
+        base_source = "deep-reconsolidation"
+
         try:
             # 1. Run adversarial loop with smart models
             result_data = await self.adversarial_consolidation(
                 self.generator_smart, self.evaluator_smart, memories_text,
                 max_attempts=3, quality_threshold=0.85
             )
-            
-            # 2. Persist consolidation
-            store_consolidation(
-                source_ids=result_data["source_ids"],
-                summary=result_data["summary"],
-                insight=result_data["insight"],
-                connections=result_data.get("connections", [])
-            )
-            
-            # 3. Create high-fidelity Insight MemCube
-            new_cube = await store_memory(
-                raw_text=result_data["insight"],
-                summary=result_data["summary"],
-                entities=[],
-                topics=["deep-insight", "architectural-consensus"],
-                connections=result_data.get("connections", []),
-                importance_score=0.9,
-                sector="semantic",
-                source="deep-reconsolidation"
-            )
-            
+
+            # 2. Track source IDs for orphan sweeping
+            original_source_ids = set(m["id"] for m in data.get("memories", []))
+            processed_source_ids = set()
+            insights_created = 0
+
+            # 3. Persist one consolidation record + one Insight Cube per topic
+            for topic in result_data.get("insights", []):
+                if not topic.get("source_ids"):
+                    continue
+
+                processed_source_ids.update(topic["source_ids"])
+                store_consolidation(
+                    source_ids=topic["source_ids"],
+                    summary=topic["summary"],
+                    insight=topic["insight"],
+                    connections=topic.get("connections", []),
+                )
+                await store_memory(
+                    raw_text=topic["insight"],
+                    summary=f"[{topic['topic_name']}] {topic['summary']}",
+                    entities=[],
+                    topics=base_topics + [topic["topic_name"]],
+                    connections=topic.get("connections", []),
+                    importance_score=base_importance,
+                    sector="semantic",
+                    source=base_source,
+                )
+                insights_created += 1
+
+            self._cleanup_orphans(original_source_ids, processed_source_ids)
+
             # After consolidation, run self-improvement
             await self.self_improve()
-            return f"Deep consolidation complete. Created Insight Cube #{new_cube['memory_id']}"
+            return f"Deep consolidation complete. Created {insights_created} Insight Cube(s)"
         except Exception as e:
             log.error(f"Deep adversarial consolidation failed: {e}")
             return f"Deep consolidation failed: {e}"
@@ -489,6 +528,11 @@ async def _dream_reorganize(agent: MemoryAgent):
     # Use embedding-based clustering
     clusters = cluster_memories_by_embedding(memories, threshold=0.75)
 
+    # Caller-scoped context variables for the dream tier
+    base_importance = 0.85
+    base_topics = ["dream-insight"]
+    base_source = "autodream-consolidation"
+
     import json
     for cluster_name, cluster_members in clusters.items():
         if len(cluster_members) >= 3:
@@ -501,24 +545,36 @@ async def _dream_reorganize(agent: MemoryAgent):
                     cluster_text,
                     quality_threshold=0.9,
                 )
-                # Persist: mark sources consolidated and write the Insight Cube.
-                store_consolidation(
-                    source_ids=result_data["source_ids"],
-                    summary=result_data["summary"],
-                    insight=result_data["insight"],
-                    connections=result_data.get("connections", []),
-                )
-                new_cube = await store_memory(
-                    raw_text=result_data["insight"],
-                    summary=result_data["summary"],
-                    entities=[],
-                    topics=["dream-insight"],
-                    connections=result_data.get("connections", []),
-                    importance_score=0.85,
-                    sector="semantic",
-                    source="autodream-consolidation",
-                )
-                log.info(f"💤 Dream: created Insight Cube #{new_cube['memory_id']} from {cluster_name}")
+
+                original_source_ids = set(m["id"] for m in cluster_members)
+                processed_source_ids = set()
+                insights_created = 0
+
+                for topic in result_data.get("insights", []):
+                    if not topic.get("source_ids"):
+                        continue
+
+                    processed_source_ids.update(topic["source_ids"])
+                    store_consolidation(
+                        source_ids=topic["source_ids"],
+                        summary=topic["summary"],
+                        insight=topic["insight"],
+                        connections=topic.get("connections", []),
+                    )
+                    new_cube = await store_memory(
+                        raw_text=topic["insight"],
+                        summary=f"[{topic['topic_name']}] {topic['summary']}",
+                        entities=[],
+                        topics=base_topics + [topic["topic_name"]],
+                        connections=topic.get("connections", []),
+                        importance_score=base_importance,
+                        sector="semantic",
+                        source=base_source,
+                    )
+                    insights_created += 1
+                    log.info(f"💤 Dream: created Insight Cube #{new_cube['memory_id']} from {cluster_name}")
+
+                agent._cleanup_orphans(original_source_ids, processed_source_ids)
             except Exception as e:
                 log.debug(f"Dream cluster consolidation failed: {e}")
 
