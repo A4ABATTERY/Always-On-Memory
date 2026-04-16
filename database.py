@@ -34,6 +34,12 @@ def get_db() -> sqlite3.Connection:
         db.enable_load_extension(False)
     return db
 
+def reset_engine() -> None:
+    """Flush any cached state to allow env overrides to take effect."""
+    # Since we use sqlite3.connect() directly in get_db, there is no cached engine
+    # to reset, but we keep this as a placeholder for consistency with other layers.
+    pass
+
 @contextlib.contextmanager
 def db_session() -> Generator[sqlite3.Connection, None, None]:
     """Context manager that ensures the database connection is closed."""
@@ -96,6 +102,29 @@ def init_db() -> None:
 
         try:
             db.execute("ALTER TABLE processed_files ADD COLUMN prev_hash TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Lexical Symbol Index — dedicated table for named code identifiers.
+        # Separate from `documents` so symbol lookups are O(log n) via real indexes,
+        # not O(n) full-table scans through a JSON column.
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS symbols (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path   TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                line_no     INTEGER,
+                signature   TEXT,
+                updated_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols (symbol_name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols (file_path);
+        """)
+
+        # Promotion tracking — hash-gates WorkDir file promotion to the Ingest Agent.
+        try:
+            db.execute("ALTER TABLE documents ADD COLUMN promoted_hash TEXT DEFAULT NULL")
         except sqlite3.OperationalError:
             pass  # Column already exists
 

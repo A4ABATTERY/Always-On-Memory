@@ -39,11 +39,15 @@ class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
         with patch('agent.build_agents', return_value=self.mock_agents):
             self.agent = MemoryAgent()
 
+        self.batch_embed_patcher = patch("librarian.embed_texts_batch", AsyncMock(return_value=[_DUMMY_VECTOR]))
+        self.batch_embed_patcher.start()
+
         self.test_dir = Path("test_sync_dir")
         self.test_dir.mkdir(exist_ok=True)
 
     def tearDown(self):
         self.embed_patcher.stop()
+        self.batch_embed_patcher.stop()
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         if self.test_dir.exists():
@@ -92,8 +96,8 @@ class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
         # 4. Verify Task is in Queue
         self.assertEqual(self.agent.sync_queue.qsize(), 1)
         task = await self.agent.sync_queue.get()
+        self.assertEqual(os.path.normcase(task["path"]), os.path.normcase(str(file_path.resolve())))
         self.assertEqual(task["memory_id"], memory_id)
-        self.assertEqual(task["path"], str(file_path.resolve()))
         
         # 5. Simulate Sync Worker Audit
         # Mock sync_agent response to evolve the link

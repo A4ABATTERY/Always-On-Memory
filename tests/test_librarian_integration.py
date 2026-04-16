@@ -33,15 +33,17 @@ class TestLibrarianIntegration(unittest.IsolatedAsyncioTestCase):
         test_file = self.test_dir / "hello.py"
         test_file.write_text("print('hello world')")
         
-        # Mock embed_text to return a dummy vector
-        dummy_vector = [0.1] * 3072 # Assuming 3072 dim for Gemini
-        
-        with patch('librarian.embed_text', new_callable=AsyncMock, return_value=dummy_vector):
+        # Mock embed_texts_batch (used by index_all_dirs since Phase 1 batch-embed refactor)
+        dummy_vector = [0.1] * 3072  # Gemini embedding-2-preview dimension
+
+        with patch('librarian.embed_texts_batch', new_callable=AsyncMock, return_value=[dummy_vector]):
             await index_all_dirs([str(self.test_dir)])
             
             with db_session() as db:
-                doc = db.execute("SELECT * FROM documents WHERE path = ?", (str(test_file.resolve()),)).fetchone()
-                self.assertIsNotNone(doc)
+                # Use LIKE with lower() to be case-insensitive on Windows paths
+                target = str(test_file.resolve()).lower()
+                doc = db.execute("SELECT * FROM documents WHERE lower(path) = ?", (target,)).fetchone()
+                self.assertIsNotNone(doc, f"Document for {target} not found in DB.")
                 self.assertEqual(doc["chunk_text"], "print('hello world')")
                 
                 # Check if vector was inserted
