@@ -37,9 +37,19 @@ def _load_dotenv() -> None:
             continue
         if "=" not in line:
             continue
+
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        # Handle quoted values first (before any comment stripping)
+        if (value.startswith('"') and value.endswith('"')) or \
+           (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        else:
+            # Only strip trailing inline comments from unquoted values
+            if " #" in value:
+                value = value.split(" #")[0].strip()
+        
         if key and key not in os.environ:  # don't override existing env vars
             os.environ[key] = value
 
