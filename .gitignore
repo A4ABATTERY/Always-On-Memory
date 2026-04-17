@@ -27,4 +27,4 @@ CLAUDE.md
 past_developments/
 local-developments
 .worktrees/
-docs/superpowers/
+docs/superpowers/*
