@@ -34,16 +34,17 @@ Most AI agents have amnesia. They process information, then forget everything. T
 │                        Always-On-Memory (v3)                                             │
 │                                                                                          │
 │  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐ │
-│  │   agent.py       │  │ agents_factory.py  │  │   librarian.py   │  │    server.py    │ │
-│  │                  │  │                    │  │                  │  │                 │ │
-│  │ • Process Leader │  │ • Gen-Eval Harness │  │ • TurboQuant     │  │ • REST API      │ │
-│  │ • AutoDream Loop │  │ • PydanticAI       │  │ • Vector Indexer │  │ • Cube Im/Ex    │ │
-│  │ • Inbox Watcher  │  │ • Tool Mapping     │  │ • Search Logic   │  │ • Search/Query  │ │
+│  │  Process Leader  │  │   Agent Factory    │  │     Librarian    │  │   Server (API)  │ │
+│  │  (agent.py)      │  │ (agents_factory.py)│  │  (librarian.py)  │  │    (server.py)  │ │
+│  ├──────────────────┤  ├────────────────────┤  ├──────────────────┤  ├─────────────────┤ │
+│  │ • asyncio.run()  │  │ • PydanticAI       │  │ • Vector Indexer │ • REST API      │ │
+│  │ • AutoDream Loop │  │ • Gen-Eval Harness │  │ • os.scandir Walk│ • Cube Im/Ex    │ │
+│  │ • Inbox Watcher  │  │ • Tool Mapping     │  │ • Threaded I/O   │ • Search/Query  │ │
 │  └────────┬─────────┘  └────────┬───────────┘  └────────┬─────────┘  └──────┬──────────┘ │
 │           │                     │                       │                   │            │
 │  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
 │  │                                 Shared Layer                                        │ │
-│  │                    (config.py │ models.py │ database.py │ utils.py)                 │ │
+│  │    (config.py │ models.py │ database.py │ utils.py │ memory_store.py)               │ │
 │  └────────┬─────────────────────┬───────────────────────┬───────────────────┬──────────┘ │
 │           │                     │                       │                   │            │
 │  ┌────────┴─────────────────────┴───────────────────────┴───────────────────┴──────────┐ │
@@ -62,16 +63,13 @@ Most AI agents have amnesia. They process information, then forget everything. T
 ## Features (V3.3 Upgrade)
 
 ### 🧠 Structural Memory Linkage
-V3.3 introduces a proactive **Self-Healing** layer for code-memory grounding. The system no longer just links memories to files; it actively audits them:
-
-1. **Drift Detection**: When the Librarian indexes code, it calculates the vector distance between a file's content and its linked MemCubes.
+V3.3 introduces a proactive **Self-Healing** layer for code-memory grounding:
+1. **Librarian Mode (Vector Search)**: 
+    - **High Performance**: Uses optimized recursive walkers (`os.scandir`) to prune ignored branches (e.g. `node_modules`) at the walk start, ensuring near-instant indexing.
+    - **Threaded Execution**: Moves FS-heavy modification checks to background threads to prevent event loop blocking on slow file systems (Windows/OneDrive).
+    - **Drift Detection**: Compares current embeddings with linked `MemCubes` to detect semantic drift.
 2. **Proactive Sync**: If distance exceeds `DRIFT_THRESHOLD` (0.18), the cube is sent to the **Sync Auditor** agent.
-3. **Link Evolution**:
-    - **ACTIVE**: Grounding is still valid.
-    - **HISTORICAL**: Code has diverged completely (Link preserved as historical trace).
-    - **REPAIR**: Code has changed but the intent remains. The agent **autonomously updates** the memory's technical description to stay grounded.
-
-4. **Monitoring**: Track grounding integrity via the `/status` and `/links` endpoints.
+3. **Link Evolution**: Link statuses evolve from `ACTIVE` to `HISTORICAL` or `REPAIR` autonomously.
 
 ## Quick Start
 
@@ -254,8 +252,7 @@ Ports exposed: `8888` (REST API) and `8765` (MCP server).
 | `/export_cubes` | GET | Export MemCubes as portable JSON `?ids=1,2,3` |
 | `/import_cubes` | POST | Import portable MemCube JSON `{"cubes": [...]}` |
 | `/links` | GET | List structural links + grounding integrity (V3.3) |
-| `/consolidate` | POST | Trigger manual adversarial consolidation |
-| `/reconsolidate` | POST | Trigger deep re-consolidation (Pro model) |
+| `/consolidate` | POST | Trigger manual consolidation |
 | `/improve` | POST | Trigger manual self-improvement audit |
 | `/delete` | POST | Delete a MemCube `{"memory_id": 1}` |
 | `/clear` | POST | Full MemOS reset (clears database & inbox) |
@@ -285,7 +282,8 @@ Memories are categorized into psychological sectors for richer retrieval:
 
 When `WATCH_DIRS` is set, the agent periodically scans those directories for changes using `os.path.getmtime`. To avoid indexing while files are still being actively modified (e.g., by an LLM), it implements a **10-second debounce timer**.
 
-- **Detection**: Checks for modifications every 5 seconds (`SCAN_INTERVAL`).
+- **Detection**: Checks for modifications every 5 seconds (`SCAN_INTERVAL`) using high-performance `os.scandir` walkers that prune ignored directories (e.g. `node_modules`) at the recursion point.
+- **Background Threading**: FS-heavy operations are shifted to background threads to ensure the main Agent loop remains responsive to queries even during large indexing tasks.
 - **Debounce**: Waits for a 10-second quiet window (`DEBOUNCE_INTERVAL`) after the last detected change before indexing.
 - **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`). 
 - **Structural Chunking**: Code is partitioned using language-aware boundaries (functions/classes) rather than fixed character offsets, ensuring semantic units remain intact.
@@ -341,11 +339,11 @@ All LLM calls use `retry_with_backoff()`:
 
 The project has been refactored into focused, type-safe modules:
 
-- `agent.py`: Principal entry point and background loop orchestrator.
+- `agent.py`: Principal entry point and background loop orchestrator. Powered by `asyncio.run()`.
 - `agents_factory.py`: PydanticAI agent definitions and tool mapping.
 - `config.py`: Centralized environment variable loading and settings.
 - `database.py`: SQLite connection and `sqlite-vec` initialization.
-- `librarian.py`: Semantic file search (Librarian) logic and debounce loop.
+- `librarian.py`: Semantic file search (Librarian) logic using high-performance `os.scandir` walkers.
 - `memory_store.py`: CRUD operations for memory persistence and rankings.
 - `models.py`: Immutable Pydantic data models for core entities.
 - `server.py`: aiohttp API server implementation.
