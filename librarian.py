@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -349,7 +350,9 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                 db.commit()
 
             chunks = chunk_code_structural(text, f.suffix)
-            log.info(f"📚 Indexing '{f.name}': {len(chunks)} structural chunks (1 batch embed call)...")
+            n_calls = math.ceil(len(chunks) / 100)
+            call_label = f"{n_calls} batch embed call{'s' if n_calls > 1 else ''}"
+            log.info(f"📚 Indexing '{f.name}': {len(chunks)} structural chunks ({call_label})...")
             now = datetime.now(timezone.utc).isoformat()
 
             if get_shutdown_event().is_set():
