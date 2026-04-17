@@ -16,13 +16,24 @@ from typing import List, Dict, Any
 from config import (
     WATCH_DIRS, IGNORE_DIRS, SKIP_DIRS, CODE_EXTENSIONS,
     HAS_SQLITE_VEC, SKILLS_DIR, DEBOUNCE_INTERVAL, SCAN_INTERVAL,
-    get_shutdown_event, INBOX_DIR, PROMOTION_THRESHOLD
+    get_shutdown_event, INBOX_DIR, PROMOTION_THRESHOLD, VERIFY_INTERVAL_HOURS
 )
 from database import db_session
 from utils import is_binary_file, embed_text, embed_texts_batch, serialize_int8, chunk_text, chunk_code_structural
 from lexical_parser import extract_symbols
 
 log = logging.getLogger("memory-agent.librarian")
+
+
+def get_resolved_watch_dirs() -> List[str]:
+    """Resolve WATCH_DIRS env var into a list of normalized absolute paths.
+
+    Single source of truth used by librarian_loop, verification_loop, and
+    the REST /verify endpoint — avoids duplicating path resolution logic.
+    """
+    dirs = [d.strip(' \t\n\r"\'') for d in WATCH_DIRS.split(",") if d.strip()]
+    return [str(Path(d).expanduser().resolve()) for d in dirs]
+
 
 async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
     """Search indexed source code and documents by semantic similarity."""
@@ -345,8 +356,16 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                     skipped += 1
                     continue
 
-                # Delete all previous chunks for this file before re-indexing
-                db.execute("DELETE FROM documents WHERE lower(path) = ?", (f_abs.lower(),))
+                # Delete all previous chunks for this file before re-indexing.
+                # vec_documents must be cleaned first — vec0 virtual tables do not
+                # cascade FK deletes, so old rows with stale document_ids would
+                # otherwise accumulate and pollute semantic search results.
+                db.execute(
+                    "DELETE FROM vec_documents WHERE document_id IN "
+                    "(SELECT id FROM documents WHERE path = ?)",
+                    (f_abs,)
+                )
+                db.execute("DELETE FROM documents WHERE path = ?", (f_abs,))
                 db.commit()
 
             chunks = chunk_code_structural(text, f.suffix)
@@ -460,10 +479,7 @@ async def librarian_loop(on_drift_detected: Any = None, on_promotion_triggered: 
         log.warning("📚 Librarian: sqlite-vec not found. Skipping vector indexer.")
         return
 
-    dirs = [d.strip(' \t\n\r"\'') for d in WATCH_DIRS.split(",") if d.strip()]
-    
-    # Resolve and expand all dirs once at startup
-    dirs = [str(Path(d).expanduser().resolve()) for d in dirs]
+    dirs = get_resolved_watch_dirs()
     
     with db_session() as db:
         row = db.execute("SELECT MAX(updated_at) as last_idx FROM documents").fetchone()
@@ -503,6 +519,321 @@ async def librarian_loop(on_drift_detected: Any = None, on_promotion_triggered: 
 
         try:
             await asyncio.wait_for(get_shutdown_event().wait(), timeout=SCAN_INTERVAL)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+
+# ─── Verification Pass ─────────────────────────────────────────
+
+
+async def index_single_file(
+    path: str,
+    on_drift_detected: Any = None,
+    on_promotion_triggered: Any = None,
+) -> bool:
+    """Re-index a single file by absolute path, always overwriting existing data.
+
+    This is the repair path used by the verification pass. Unlike index_all_dirs,
+    it never checks the content hash — it always re-indexes regardless of what
+    is already stored, since the goal is to fix incomplete or missing chunks.
+
+    Cleanup order:
+      1. vec_documents (by document_id) — vec0 tables don't cascade FK deletes
+      2. documents — remove stale chunk rows
+      3. symbols — remove stale LSI entries
+
+    promoted_hash is preserved when the file content is unchanged (same hash),
+    preventing a re-promotion of already-promoted files on the next librarian pass.
+    """
+    f = Path(path)
+    if not f.is_file():
+        raise FileNotFoundError(f"index_single_file: not a file: {path}")
+
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise IOError(f"index_single_file: cannot read {path}: {e}") from e
+
+    content_hash = hashlib.md5(text.encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Save promoted_hash before wiping rows so we can restore it if content unchanged
+    saved_promoted_hash = None
+    with db_session() as db:
+        row = db.execute(
+            "SELECT content_hash, promoted_hash FROM documents WHERE path = ? AND chunk_index = 0",
+            (path,)
+        ).fetchone()
+        if row:
+            saved_promoted_hash = row["promoted_hash"] if row["content_hash"] == content_hash else None
+
+        # Delete in correct order: vectors first, then chunk rows, then symbols
+        db.execute(
+            "DELETE FROM vec_documents WHERE document_id IN "
+            "(SELECT id FROM documents WHERE path = ?)",
+            (path,)
+        )
+        db.execute("DELETE FROM documents WHERE path = ?", (path,))
+        db.execute("DELETE FROM symbols WHERE file_path = ?", (path,))
+        db.commit()
+
+    chunks = chunk_code_structural(text, f.suffix)
+    n_calls = math.ceil(len(chunks) / 100)
+    call_label = f"{n_calls} batch embed call{'s' if n_calls > 1 else ''}"
+    log.info(f"📋 Verifier re-indexing '{f.name}': {len(chunks)} chunks ({call_label})...")
+
+    if get_shutdown_event().is_set():
+        return False
+
+    all_embeddings = await embed_texts_batch(
+        chunks,
+        task_type="document",
+        titles=[f.name] * len(chunks),
+        shutdown_event=get_shutdown_event(),
+    )
+
+    chunks_embeddings = []
+    for i, (chunk, embedding) in enumerate(zip(chunks, all_embeddings)):
+        if get_shutdown_event().is_set():
+            break
+
+        if embedding:
+            chunks_embeddings.append(embedding)
+
+        with db_session() as db:
+            db.execute(
+                "INSERT INTO documents (path, content_hash, chunk_text, chunk_index, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (path, content_hash, chunk, i, now),
+            )
+            doc_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            if embedding:
+                try:
+                    db.execute(
+                        "INSERT INTO vec_documents (document_id, embedding) VALUES (?, vec_int8(?))",
+                        (doc_id, serialize_int8(embedding)),
+                    )
+                except Exception as e:
+                    log.error(f"Vec insert error for {f.name} chunk {i}: {e}")
+            db.commit()
+
+    # Restore promoted_hash if content unchanged — prevents spurious re-promotion
+    if saved_promoted_hash is not None:
+        with db_session() as db:
+            db.execute(
+                "UPDATE documents SET promoted_hash = ? WHERE path = ? AND chunk_index = 0",
+                (saved_promoted_hash, path),
+            )
+            db.commit()
+
+    # LSI symbol index
+    symbols = extract_symbols(text, f.suffix)
+    if symbols:
+        now_sym = datetime.now(timezone.utc).isoformat()
+        with db_session() as db:
+            db.executemany(
+                "INSERT INTO symbols (file_path, symbol_name, symbol_type, line_no, signature, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(path, s["name"], s["type"], s["line_no"], s["signature"], now_sym) for s in symbols],
+            )
+            db.commit()
+
+    # Semantic drift detection
+    if on_drift_detected and chunks_embeddings:
+        await _check_semantic_drift(path, chunks_embeddings, on_drift_detected)
+
+    # Promotion check (two-argument call matching index_all_dirs pattern)
+    if on_promotion_triggered and saved_promoted_hash is None:
+        tagged = _has_memory_tag(text)
+        drift_score = 0.0
+        if not tagged and chunks_embeddings:
+            drift_score = await _max_drift_score(path, chunks_embeddings)
+        if tagged or drift_score > PROMOTION_THRESHOLD:
+            log.info(f"📢 Verifier: promoting '{f.name}' to Ingest Agent")
+            if asyncio.iscoroutinefunction(on_promotion_triggered):
+                await on_promotion_triggered(path, text)
+            else:
+                on_promotion_triggered(path, text)
+            with db_session() as db:
+                db.execute(
+                    "UPDATE documents SET promoted_hash = ? WHERE path = ? AND chunk_index = 0",
+                    (content_hash, path),
+                )
+                db.commit()
+
+    log.info(f"✅ Verifier: '{f.name}' successfully re-indexed ({len(chunks)} chunks)")
+    return True
+
+
+async def verify_watch_dirs(
+    retry_state: Dict[str, int],
+    on_drift_detected: Any = None,
+    on_promotion_triggered: Any = None,
+) -> Dict[str, Any]:
+    """Walk WATCH_DIRS and detect files that are missing or incompletely indexed.
+
+    Check A: file has no row in documents (entirely absent)
+    Check B: file has fewer stored chunks than chunk_code_structural produces
+
+    Files failing either check are retried via index_single_file. The retry
+    counter (retry_state) is incremented only on failure and deleted on success.
+    Files with retry_state[path] >= 3 are permanently skipped with a warning.
+    """
+    if not HAS_SQLITE_VEC:
+        return {"missing": [], "incomplete": [], "retried_ok": [], "retried_failed": [], "permanent_failures": []}
+
+    dirs = get_resolved_watch_dirs()
+    if not dirs:
+        return {"missing": [], "incomplete": [], "retried_ok": [], "retried_failed": [], "permanent_failures": []}
+
+    missing: List[str] = []
+    incomplete: List[str] = []
+    retried_ok: List[str] = []
+    retried_failed: List[str] = []
+    permanent_failures: List[str] = []
+
+    extra_ignores = {d.strip(' \t\n\r"\'') for d in IGNORE_DIRS.split(",") if d.strip()}
+    all_skip = SKIP_DIRS | extra_ignores
+    abs_extra = {os.path.normcase(os.path.abspath(e)) for e in extra_ignores if os.path.isabs(e)}
+
+    for dir_path in dirs:
+        folder = Path(dir_path)
+        if not folder.is_dir():
+            continue
+
+        for f in folder.rglob("*"):
+            if get_shutdown_event().is_set():
+                return {"missing": missing, "incomplete": incomplete,
+                        "retried_ok": retried_ok, "retried_failed": retried_failed,
+                        "permanent_failures": permanent_failures}
+
+            if not f.is_file() or f.suffix.lower() not in CODE_EXTENSIONS:
+                continue
+
+            rel_parts = f.relative_to(folder).parts
+            if any(p.startswith(".") or p in all_skip for p in rel_parts):
+                continue
+
+            f_abs = os.path.normcase(os.path.abspath(str(f)))
+            if any(f_abs.startswith(ignore + os.sep) or f_abs == ignore for ignore in abs_extra):
+                continue
+
+            if is_binary_file(f):
+                continue
+
+            # Check A: entirely absent?
+            needs_retry = False
+            try:
+                with db_session() as db:
+                    stored_count = db.execute(
+                        "SELECT COUNT(*) as c FROM documents WHERE path = ?", (f_abs,)
+                    ).fetchone()["c"]
+
+                if stored_count == 0:
+                    missing.append(f_abs)
+                    needs_retry = True
+                else:
+                    # Check B: incomplete chunks?
+                    try:
+                        text = f.read_text(encoding="utf-8", errors="replace")
+                        expected_count = len(chunk_code_structural(text, f.suffix))
+                        if stored_count < expected_count:
+                            log.debug(
+                                f"📋 Verifier: '{f.name}' incomplete "
+                                f"({stored_count}/{expected_count} chunks)"
+                            )
+                            incomplete.append(f_abs)
+                            needs_retry = True
+                    except Exception as e:
+                        log.error(f"📋 Verifier: error reading '{f.name}' for chunk check: {e}")
+
+            except Exception as e:
+                log.error(f"📋 Verifier: DB error checking '{f.name}': {e}")
+                continue
+
+            if not needs_retry:
+                continue
+
+            # Retry logic
+            attempt = retry_state.get(f_abs, 0)
+            if attempt >= 3:
+                log.warning(
+                    f"❌ Verifier: '{f.name}' permanently failed after 3 retries — "
+                    "manual intervention required"
+                )
+                permanent_failures.append(f_abs)
+                continue
+
+            log.warning(
+                f"⚠️  Verifier: '{f.name}' {'missing' if f_abs in missing else 'incomplete'} "
+                f"— retry {attempt + 1}/3"
+            )
+            try:
+                await index_single_file(f_abs, on_drift_detected, on_promotion_triggered)
+                if f_abs in retry_state:
+                    del retry_state[f_abs]
+                retried_ok.append(f_abs)
+            except Exception as e:
+                retry_state[f_abs] = attempt + 1
+                log.error(f"⚠️  Verifier: retry {attempt + 1}/3 failed for '{f.name}': {e}")
+                retried_failed.append(f_abs)
+
+    total_issues = len(missing) + len(incomplete)
+    log.info(
+        f"📋 Verifier: scan complete — {len(missing)} missing, {len(incomplete)} incomplete, "
+        f"{len(permanent_failures)} permanent failures"
+    )
+    return {
+        "missing": missing,
+        "incomplete": incomplete,
+        "retried_ok": retried_ok,
+        "retried_failed": retried_failed,
+        "permanent_failures": permanent_failures,
+    }
+
+
+async def verification_loop(
+    retry_state: Dict[str, int],
+    on_drift_detected: Any = None,
+    on_promotion_triggered: Any = None,
+) -> None:
+    """Periodically verify that all files in WATCH_DIRS are fully indexed.
+
+    Runs verify_watch_dirs every VERIFY_INTERVAL_HOURS hours. Waits 300 seconds
+    at startup to avoid racing with librarian_loop's initial debounce pass.
+    """
+    if not HAS_SQLITE_VEC:
+        log.warning("📋 Verifier: sqlite-vec not found. Skipping verification loop.")
+        return
+    if not WATCH_DIRS:
+        log.info("📋 Verifier: WATCH_DIRS is empty. Skipping verification loop.")
+        return
+
+    log.info(
+        f"📋 Verifier loop started (interval: {VERIFY_INTERVAL_HOURS}h, "
+        "startup delay: 300s)."
+    )
+
+    # Startup delay — let librarian_loop complete its initial pass first
+    try:
+        await asyncio.wait_for(get_shutdown_event().wait(), timeout=300)
+        return  # shutdown during delay
+    except asyncio.TimeoutError:
+        pass
+
+    while not get_shutdown_event().is_set():
+        try:
+            await verify_watch_dirs(retry_state, on_drift_detected, on_promotion_triggered)
+        except Exception as e:
+            log.error(f"📋 Verifier loop error: {e}")
+
+        try:
+            await asyncio.wait_for(
+                get_shutdown_event().wait(),
+                timeout=VERIFY_INTERVAL_HOURS * 3600,
+            )
             break
         except asyncio.TimeoutError:
             pass

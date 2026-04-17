@@ -75,6 +75,9 @@ SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "5"))          # seconds bet
 # AutoDream configuration
 IDLE_THRESHOLD_MINUTES: int = int(os.getenv("IDLE_THRESHOLD_MINUTES", "30"))
 AUTODREAM_CHECK_INTERVAL: int = int(os.getenv("AUTODREAM_CHECK_INTERVAL", "300"))  # 5 min
+
+# Verification loop — how often to scan WATCH_DIRS for missing/incomplete indexed files
+VERIFY_INTERVAL_HOURS: int = int(os.getenv("VERIFY_INTERVAL_HOURS", "24"))
 CONSOLIDATION_QUALITY_THRESHOLD: float = float(os.getenv("CONSOLIDATION_QUALITY_THRESHOLD", "0.85"))
 DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
 # Promotion threshold — distinct from DRIFT_THRESHOLD. A WorkDir file whose drift

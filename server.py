@@ -10,7 +10,7 @@ from memory_store import (
     get_all_links
 )
 
-from librarian import search_documents
+from librarian import search_documents, verify_watch_dirs
 from config import INBOX_DIR
 
 # Note: MemoryAgent and clear_all_memories will be passed or imported correctly.
@@ -117,6 +117,28 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
         result = get_all_links()
         return web.json_response(result)
 
+    async def handle_verify(request: web.Request) -> web.Response:
+        """Manually trigger a verification scan of WATCH_DIRS.
+
+        Detects files that are missing or incompletely indexed and retries them
+        up to 3 times per agent lifetime. Shares retry state with the background
+        verification_loop so counts are consistent.
+        """
+        result = await verify_watch_dirs(
+            agent.verify_retry_state,
+            on_drift_detected=agent.push_sync_task,
+            on_promotion_triggered=agent.promote_file,
+        )
+        return web.json_response({
+            "status": "ok",
+            "missing": len(result["missing"]),
+            "incomplete": len(result["incomplete"]),
+            "retried_ok": len(result["retried_ok"]),
+            "retried_failed": len(result["retried_failed"]),
+            "permanent_failures": len(result["permanent_failures"]),
+            "details": result,
+        })
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -130,5 +152,6 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
     app.router.add_get("/export_cubes", handle_export_cubes)
     app.router.add_post("/import_cubes", handle_import_cubes)
     app.router.add_get("/links", handle_links)
+    app.router.add_post("/verify", handle_verify)
 
     return app
