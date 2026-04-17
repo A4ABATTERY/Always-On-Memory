@@ -21,7 +21,7 @@ Most AI agents have amnesia. They process information, then forget everything. T
 | **Structural Linkage** | Proactive background auditing and autonomous "Self-Healing" of code-memory connections (V3.3) |
 | **Memory Ingestion** | Recursive, hash-gated multimodal ingestion (text, images, audio, video) from Inbox |
 | **Semantic Invalidation**| Automated hard-expiry (`valid_to`) of superseded memories upon source file updates |
-| **Librarian Mode** | High-performance semantic code search with structural chunking |
+| **Librarian Mode** | High-performance semantic code search with structural chunking and Gemini V2 prefixing |
 | **Lexical Symbol Index**| Fast O(log n) identifier lookups (functions, classes, constants) |
 | **Deep Re-Consolidation** | 24h quality audit using the smartest available models (Gemini 2.0 Pro) |
 | **Self-Improvement** | Autonomously evolves project-specific skills and patterns (EvoSkill) |
@@ -285,7 +285,7 @@ When `WATCH_DIRS` is set, the agent periodically scans those directories for cha
 - **Detection**: Checks for modifications every 5 seconds (`SCAN_INTERVAL`) using high-performance `os.scandir` walkers that prune ignored directories (e.g. `node_modules`) at the recursion point.
 - **Background Threading**: FS-heavy operations are shifted to background threads to ensure the main Agent loop remains responsive to queries even during large indexing tasks.
 - **Debounce**: Waits for a 10-second quiet window (`DEBOUNCE_INTERVAL`) after the last detected change before indexing.
-- **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`). 
+- **Indexing**: Uses MD5 hashing to confirm changes before generating `sqlite-vec` embeddings (`gemini-embedding-2-preview`). Uses optimized batch processing (up to 100/call) to bypass single-content interpretation bugs.
 - **Structural Chunking**: Code is partitioned using language-aware boundaries (functions/classes) rather than fixed character offsets, ensuring semantic units remain intact.
 - **Lexical Symbol Index (LSI)**: Extract classes, functions, and variable signatures into a dedicated relational index for instant, exact-match code navigation.
 

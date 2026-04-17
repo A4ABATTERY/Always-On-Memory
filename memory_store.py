@@ -33,7 +33,7 @@ async def store_memory(
 ) -> Dict[str, Any]:
     """Store a MemCube in the database."""
     if embedding is None:
-        embedding = await embed_text(raw_text) or []
+        embedding = await embed_text(raw_text, task_type="document", title=summary) or []
 
     with db_session() as db:
         now = datetime.now(timezone.utc).isoformat()

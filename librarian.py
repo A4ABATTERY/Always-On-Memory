@@ -28,7 +28,7 @@ async def search_documents(query: str, k: int = 5) -> Dict[str, Any]:
     if not HAS_SQLITE_VEC:
         return {"results": [], "error": "Vector search not available (missing sqlite-vec)"}
 
-    query_embedding = await embed_text(query, shutdown_event=get_shutdown_event())
+    query_embedding = await embed_text(query, task_type="retrieval", shutdown_event=get_shutdown_event())
     if not query_embedding:
         return {"results": [], "error": "Failed to generate embedding for query."}
 
@@ -356,7 +356,13 @@ async def index_all_dirs(dirs: List[str], on_drift_detected: Any = None, on_prom
                 break
 
             # Batch-embed all chunks in a single API call instead of N serial calls.
-            all_embeddings = await embed_texts_batch(chunks, shutdown_event=get_shutdown_event())
+            # Now passing filename as title to support Gemini V2 document prefixing.
+            all_embeddings = await embed_texts_batch(
+                chunks, 
+                task_type="document", 
+                titles=[f.name] * len(chunks),
+                shutdown_event=get_shutdown_event()
+            )
 
             chunks_embeddings = []
             for i, (chunk, embedding) in enumerate(zip(chunks, all_embeddings)):

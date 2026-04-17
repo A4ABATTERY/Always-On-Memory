@@ -149,7 +149,7 @@ class MemoryAgent:
             # Re-embed repaired text so vec_memories reflects the updated content.
             # Without this, future vector searches use the stale pre-repair embedding.
             from utils import embed_text, serialize_int8
-            new_embedding = await embed_text(suggested, shutdown_event=_shutdown_event)
+            new_embedding = await embed_text(suggested, task_type="document", title=row["summary"], shutdown_event=_shutdown_event)
             if new_embedding:
                 with db_session() as db:
                     # vec0 tables may not support OR REPLACE reliably; use DELETE+INSERT
