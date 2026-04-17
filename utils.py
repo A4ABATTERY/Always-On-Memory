@@ -101,6 +101,7 @@ async def retry_with_backoff(
     raise last_error
 
 _EMBED_CHUNK_SIZE = 4000  # Safe ceiling below gemini-embedding-2-preview's ~2048 token limit
+_EMBED_MAX_BATCH_SIZE = 100  # Google Gemini hard limit per batchEmbedContents request
 
 # Process-scoped embedding cache. Keyed on a 20-char SHA-256 prefix of the text.
 # Eliminates redundant API calls for repeated queries within a session.
@@ -153,41 +154,58 @@ async def _embed_single(text: str, task_type: str = "document", title: Optional[
         return embedding
 
 async def embed_texts_batch(
-    texts: List[str], 
-    task_type: str = "document", 
+    texts: List[str],
+    task_type: str = "document",
     titles: Optional[List[str]] = None,
     shutdown_event: Optional[asyncio.Event] = None
 ) -> List[List[float]]:
-    """Embed a list of strings in one API call (max 100 per call for Gemini)."""
+    """Embed a list of strings via sequential sub-batches of up to 100 (Gemini API limit)."""
     if not HAS_GENAI or not texts:
         return []
 
-    # Map texts to Content objects to force proper batching in the SDK
+    # Map texts to Content objects
     contents = []
     for i, t in enumerate(texts):
         title = titles[i] if titles and i < len(titles) else None
         formatted = _prepare_embedding_text(t, task_type=task_type, title=title)
         contents.append(types.Content(parts=[types.Part(text=formatted)]))
 
-    async def _do_batch_embed():
-        client = _get_client()
-        if not client: return []
-        
-        result = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=contents,
-        )
-        # result.embeddings is a list of Embedding objects
-        return [emb.values for emb in result.embeddings]
+    # Split into sub-batches of at most _EMBED_MAX_BATCH_SIZE
+    sub_batches = [
+        contents[i : i + _EMBED_MAX_BATCH_SIZE]
+        for i in range(0, len(contents), _EMBED_MAX_BATCH_SIZE)
+    ]
+
+    all_results: List[List[float]] = []
 
     async with _embed_semaphore:
-        try:
-            results = await retry_with_backoff(_do_batch_embed, shutdown_event=shutdown_event)
-            await asyncio.sleep(_EMBED_DELAY)
-            return results
-        except Exception as e:
-            log.error(f"Batch embedding failed: {e}")
-            return []
+        for sub_batch in sub_batches:
+            if shutdown_event and shutdown_event.is_set():
+                break
+
+            # Default-argument captures current sub_batch by value (avoids loop-closure gotcha)
+            async def _do_batch_embed(_batch=sub_batch):
+                client = _get_client()
+                if not client:
+                    return []
+                result = client.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=_batch,
+                )
+                return [emb.values for emb in result.embeddings]
+
+            try:
+                results = await retry_with_backoff(_do_batch_embed, shutdown_event=shutdown_event)
+                await asyncio.sleep(_EMBED_DELAY)
+                if results:
+                    all_results.extend(results)
+                else:
+                    all_results.extend([[] for _ in sub_batch])
+            except Exception as e:
+                log.error(f"Batch embedding failed (items {len(all_results)}–{len(all_results)+len(sub_batch)-1}): {e}")
+                all_results.extend([[] for _ in sub_batch])
+
+    return all_results
 
 async def embed_text(text: str, task_type: str = "document", title: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None) -> Optional[List[float]]:
     """Generate an embedding for the given text using google-genai (rate-limited).
