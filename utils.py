@@ -237,62 +237,6 @@ async def embed_text(text: str, task_type: str = "document", title: Optional[str
         log.error(f"Embedding error: {e}")
         return None
 
-async def embed_texts_batch(
-    texts: List[str],
-    shutdown_event: Optional[asyncio.Event] = None,
-) -> List[Optional[List[float]]]:
-    """Batch-embed multiple short texts in a single Gemini API call.
-
-    Texts exceeding _EMBED_CHUNK_SIZE are routed through embed_text() individually
-    (they need internal sub-chunking). Short texts are batched into one request,
-    reducing per-file indexing from N round-trips to 1.
-    """
-    if not HAS_GENAI or not texts:
-        return [None] * len(texts)
-    if shutdown_event and shutdown_event.is_set():
-        return [None] * len(texts)
-
-    short_texts: List[str] = []
-    short_indices: List[int] = []
-    results: List[Optional[List[float]]] = [None] * len(texts)
-
-    for i, t in enumerate(texts):
-        if not t or not t.strip():
-            continue
-        cache_key = hashlib.sha256(t.encode()).hexdigest()[:20]
-        if cache_key in _embed_cache:
-            results[i] = _embed_cache[cache_key]
-        elif len(t) <= _EMBED_CHUNK_SIZE:
-            short_texts.append(t)
-            short_indices.append(i)
-        else:
-            # Long text: fall back to individual embed_text (handles sub-chunking)
-            results[i] = await embed_text(t, shutdown_event=shutdown_event)
-
-    if short_texts:
-        try:
-            async with _embed_semaphore:
-                client = genai.Client()
-                response = client.models.embed_content(
-                    model=EMBEDDING_MODEL,
-                    contents=short_texts,
-                )
-                await asyncio.sleep(_EMBED_DELAY)
-
-            for list_pos, original_idx in enumerate(short_indices):
-                emb = response.embeddings[list_pos].values
-                results[original_idx] = emb
-                cache_key = hashlib.sha256(short_texts[list_pos].encode()).hexdigest()[:20]
-                if len(_embed_cache) < _EMBED_CACHE_MAX:
-                    _embed_cache[cache_key] = emb
-        except Exception as e:
-            log.error(f"Batch embedding error: {e}. Falling back to individual calls.")
-            for list_pos, original_idx in enumerate(short_indices):
-                results[original_idx] = await embed_text(short_texts[list_pos], shutdown_event=shutdown_event)
-
-    return results
-
-
 def chunk_text(text: str, max_chars: int = 1500) -> List[str]:
     """Split text into chunks, trying to break on newlines."""
     if len(text) <= max_chars:
