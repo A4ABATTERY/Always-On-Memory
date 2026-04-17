@@ -35,7 +35,7 @@ from memory_store import (
     read_all_memories,
     mark_memories_consolidated,
 )
-from librarian import librarian_loop
+from librarian import librarian_loop, verification_loop, verify_watch_dirs
 from server import build_http
 
 try:
@@ -88,6 +88,9 @@ class MemoryAgent:
         
         self.client = genai.Client() if HAS_GENAI else None
         self.sync_queue: asyncio.Queue = asyncio.Queue()
+        # Verification retry state — in-memory only, resets on restart.
+        # Key: normalized abs path, Value: failed attempt count (max 3).
+        self.verify_retry_state: dict[str, int] = {}
 
     async def push_sync_task(self, path: str, memory_id: int):
         """Callback for Librarian to push drift detection tasks."""
@@ -771,6 +774,11 @@ async def main_async(args):
         asyncio.create_task(deep_reconsolidate_loop(agent, 24)),
         asyncio.create_task(librarian_loop(on_drift_detected=agent.push_sync_task, on_promotion_triggered=agent.promote_file)),
         asyncio.create_task(agent.sync_worker_loop()),
+        asyncio.create_task(verification_loop(
+            agent.verify_retry_state,
+            on_drift_detected=agent.push_sync_task,
+            on_promotion_triggered=agent.promote_file,
+        )),
     ]
 
     # MCP server (optional — disabled if --mcp-port 0 or MCP_PORT=0)
