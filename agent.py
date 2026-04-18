@@ -19,7 +19,7 @@ from typing import Any, Optional, cast
 from pydantic_ai import Agent
 from aiohttp import web
 from config import (
-    SMART_MODEL,
+    MODEL, SMART_MODEL,
     TEXT_EXTENSIONS, ALL_SUPPORTED, MEDIA_EXTENSIONS,
     get_shutdown_event, IDLE_THRESHOLD_MINUTES, AUTODREAM_CHECK_INTERVAL,
     HAS_SQLITE_VEC, INBOX_DIR
@@ -68,6 +68,7 @@ class MemoryAgent:
     def __init__(self) -> None:
         (
             self.ingest_agent,
+            self.ingest_agent_smart,
             self.generator_lite,
             self.evaluator_lite,
             self.generator_smart,
@@ -76,8 +77,9 @@ class MemoryAgent:
             self.self_improvement_agent,
             self.sync_agent,
         ) = build_agents()
-        
+
         self.ingest_agent: Agent[None, str] = self.ingest_agent
+        self.ingest_agent_smart: Agent[None, str] = self.ingest_agent_smart
         self.generator_lite: Agent[None, MultiSynthesisResult] = self.generator_lite
         self.evaluator_lite: Agent[None, EvalResult] = self.evaluator_lite
         self.generator_smart: Agent[None, MultiSynthesisResult] = self.generator_smart
@@ -230,11 +232,19 @@ class MemoryAgent:
         log.info(f"📥 Analyzing {'file: ' + source if source else 'text content'} ({len(text)} chars)...")
         msg = f"Remember this information (source: {source}):\n\n{text}" if source else f"Remember this information:\n\n{text}"
 
+        # Route complex chunks to the smart model:
+        # complex = long text OR contains code fences OR markdown tables
+        use_smart = len(text) > 1500 or "```" in text or "|---" in text
+        selected_agent = self.ingest_agent_smart if use_smart else self.ingest_agent
+        selected_model = SMART_MODEL if use_smart else MODEL
+        if use_smart:
+            log.info(f"📥 Routing to SMART model ({selected_model}) for complex chunk")
+
         # Record timestamp before agent call so we can verify persistence afterward.
         from datetime import datetime, timezone
         before_ts = datetime.now(timezone.utc).isoformat()
 
-        result = await retry_with_backoff(self.ingest_agent.run, msg, shutdown_event=_shutdown_event)
+        result = await retry_with_backoff(selected_agent.run, msg, shutdown_event=_shutdown_event)
 
         usage = result.usage()
         log.info(f"📥 Ingested: {usage.total_tokens} tokens | {usage.input_tokens} req | {usage.output_tokens} res")
@@ -260,7 +270,22 @@ class MemoryAgent:
                 sector="episodic",
                 source=source or "ingest-fallback",
             )
+            # Tag fallback memory with the model that attempted ingestion
+            with db_session() as db:
+                db.execute(
+                    "UPDATE memories SET distillation_model = ? WHERE id = ?",
+                    (selected_model, fallback["memory_id"]),
+                )
+                db.commit()
             return f"Stored via fallback as MemCube #{fallback['memory_id']}"
+
+        # Tag all newly created memories with the model that produced them
+        with db_session() as db:
+            db.execute(
+                "UPDATE memories SET distillation_model = ? WHERE created_at >= ?",
+                (selected_model, before_ts),
+            )
+            db.commit()
 
         return result.output
 

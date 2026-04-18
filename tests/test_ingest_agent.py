@@ -79,7 +79,7 @@ class TestIngestAgentSmoke(unittest.IsolatedAsyncioTestCase):
         This test patches build_agents (and the model construction it triggers)
         so no GOOGLE_API_KEY is required.
         """
-        mock_agents = [MagicMock() for _ in range(8)]
+        mock_agents = [MagicMock() for _ in range(9)]
         mock_result = MagicMock()
         mock_result.output = "I've noted that JWT is preferred!"
         mock_result.usage.return_value = MagicMock(total_tokens=10, input_tokens=8, output_tokens=2)

@@ -62,10 +62,21 @@ Being a bit more verbose is better than being too concise; it's worse to miss a 
 5.  **Importance Scoring**: Rate 0.0 (Trivial) to 1.0 (Critical). High scores (0.8+) are reserved for core architectural decisions or security-related info.
 6.  **Temporal Validity**: If the information is ephemeral (e.g., a session token or transient bug), define `valid_to`.
 
+### ─── DISTILLATION RULES (apply to ALL inputs) ───
+
+The `summary` parameter in `store_memory` is a **distillation**, NOT a compression.
+Distillation means: concentrate the essence while losing NOTHING of value.
+
+*   **Preserve ALL enumerable lists verbatim** — column names, scope names, error codes, flag names.
+*   **Preserve ALL specific numeric values, thresholds, and limits** — e.g. "50GB", "0.18", "10,000 chars".
+*   **Preserve ALL named identifiers exactly** — function names, file paths, class names, variable names, SQL view names. Do NOT paraphrase or abbreviate them.
+*   **Minimum distillation length**: For any input > 500 chars, the `summary` must be at least 100 words. Do NOT produce a one-sentence summary for a multi-paragraph input.
+*   **Distillation quality check**: Before calling `store_memory`, count the named identifiers (functions, files, classes) in your input. If there are 5 or more, ensure at least 3 appear verbatim in your `summary`. If they do not, extend the summary before calling the tool.
+
 ### ─── GOLDEN INGESTION SAMPLE ───
 
 *   **Input**: "Added a new `AuthMiddleware` to `server.py` to handle JWT validation."
-*   **Action**: Call `store_memory(raw_text="...", summary="...", sector="semantic", entities=["AuthMiddleware", "server.py", "JWT"], topics=["Authentication", "Middleware"], importance_score=0.7)`
+*   **Action**: Call `store_memory(raw_text="...", summary="AuthMiddleware added to server.py for JWT validation. The middleware intercepts all incoming requests, extracts the Bearer token from Authorization headers, validates it using the jwt library, and attaches the decoded claims to the request context. Unauthorized requests receive a 401 response.", sector="semantic", entities=["AuthMiddleware", "server.py", "JWT", "Bearer token"], topics=["Authentication", "Middleware"], importance_score=0.7)`
 
 
 **MANDATE**: Always end by calling the `store_memory` tool. Your response should confirm storage and state the Sector chosen.
@@ -264,6 +275,7 @@ You are a Memory-Code Link Integrity Auditor. Your task is to verify if a Memory
 
 def build_agents() -> Tuple[
     Agent[None, str],
+    Agent[None, str],
     Agent[None, MultiSynthesisResult],
     Agent[None, EvalResult],
     Agent[None, MultiSynthesisResult],
@@ -280,6 +292,14 @@ def build_agents() -> Tuple[
 
     ingest_agent = Agent(
         lite_model,
+        system_prompt=INGEST_SYSTEM_PROMPT,
+        tools=[store_memory],
+    )
+
+    # Smart ingest agent — same prompt, uses SMART_MODEL.
+    # Selected for chunks > 1500 chars or containing code blocks / markdown tables.
+    ingest_agent_smart = Agent(
+        smart_model,
         system_prompt=INGEST_SYSTEM_PROMPT,
         tools=[store_memory],
     )
@@ -337,9 +357,10 @@ def build_agents() -> Tuple[
     )
 
     return (
-        ingest_agent, 
-        memory_generator_lite, memory_evaluator_lite, 
-        memory_generator_smart, memory_evaluator_smart, 
+        ingest_agent,
+        ingest_agent_smart,
+        memory_generator_lite, memory_evaluator_lite,
+        memory_generator_smart, memory_evaluator_smart,
         query_agent, self_improvement_agent,
         sync_agent
     )

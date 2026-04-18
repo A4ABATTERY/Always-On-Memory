@@ -42,6 +42,7 @@ class MemCube(BaseModel):
     created_at: str = ""
     consolidated: bool = False
     valid_to: Optional[str] = None
+    distillation_model: Optional[str] = None
     composite_score: Optional[float] = None
     recall_reason: Optional[List[str]] = None
 
