@@ -35,7 +35,7 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
         if not text:
             return web.json_response({"error": "missing 'text' field"}, status=400)
         source = data.get("source", "api")
-        result = await agent.ingest(text, source=source)
+        result = await agent.ingest(text, source=source, origin_platform="rest-api")
         return web.json_response({"status": "ingested", "response": result})
 
     async def handle_consolidate(request: web.Request) -> web.Response:
