@@ -152,7 +152,9 @@ def read_unconsolidated_memories(limit: int = 30) -> Dict[str, Any]:
     memories = []
     for r in rows:
         memories.append({
-            "id": r["id"], "cube_id": r["cube_id"], "summary": r["summary"],
+            "id": r["id"], "cube_id": r["cube_id"],
+            "raw_text": r["raw_text"],
+            "summary": r["summary"],
             "entities": json.loads(r["entities"]), "topics": json.loads(r["topics"]),
             "importance_score": r["importance_score"], "created_at": r["created_at"],
         })
