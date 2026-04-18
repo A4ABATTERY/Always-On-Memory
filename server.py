@@ -2,6 +2,7 @@
 Server Module — Defines the HTTP API using aiohttp.
 """
 
+import logging
 from aiohttp import web
 from typing import Any
 
@@ -12,12 +13,51 @@ from memory_store import (
 
 from librarian import search_documents, verify_watch_dirs
 from config import INBOX_DIR
+from mcp_auth import load_api_keys, validate_key
+
+log = logging.getLogger("memory-agent.rest")
+
+# Paths that bypass authentication — health and status checks must always work.
+_OPEN_PATHS = {"/", "/health", "/status"}
 
 # Note: MemoryAgent and clear_all_memories will be passed or imported correctly.
 
 def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
     """Build the aiohttp application with all routes."""
-    app = web.Application()
+    import os
+    # Computed at build time (not module import time) so tests can override the env var.
+    no_auth = os.getenv("AOM_REST_NO_AUTH", "false").lower() in ("1", "true", "yes")
+    api_keys = load_api_keys()
+
+    @web.middleware
+    async def auth_middleware(request: web.Request, handler):
+        """Bearer token auth for the REST API. Reuses AOM_API_KEYS key pool.
+
+        Auth is skipped when:
+        - AOM_REST_NO_AUTH=true  (explicit opt-out for localhost dev)
+        - AOM_API_KEYS is unset  (mirrors MCP behavior: no keys = no auth)
+        - path is in _OPEN_PATHS (health / status always accessible)
+        """
+        if no_auth or not api_keys or request.path in _OPEN_PATHS:
+            return await handler(request)
+
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            log.warning(f"rest-auth: missing Bearer token for {request.path}")
+            raise web.HTTPUnauthorized(
+                reason="Authorization: Bearer <key> header required"
+            )
+
+        key = auth[len("Bearer "):]
+        caller_id = validate_key(key, api_keys)
+        if caller_id is None:
+            log.warning(f"rest-auth: invalid API key for {request.path}")
+            raise web.HTTPForbidden(reason="Invalid API key")
+
+        request["caller_id"] = f"rest-api:{caller_id}"
+        return await handler(request)
+
+    app = web.Application(middlewares=[auth_middleware])
 
     async def handle_query(request: web.Request) -> web.Response:
         q = request.query.get("q", "").strip()
@@ -35,7 +75,10 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
         if not text:
             return web.json_response({"error": "missing 'text' field"}, status=400)
         source = data.get("source", "api")
-        result = await agent.ingest(text, source=source)
+        # Use authenticated caller identity when available (set by auth_middleware).
+        # Falls back to "rest-api" for unauthenticated requests (REST_NO_AUTH mode).
+        origin = request.get("caller_id", "rest-api")
+        result = await agent.ingest(text, source=source, origin_platform=origin)
         return web.json_response({"status": "ingested", "response": result})
 
     async def handle_consolidate(request: web.Request) -> web.Response:
