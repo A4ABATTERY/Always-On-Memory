@@ -33,7 +33,7 @@ class TestCoreMCPTools(unittest.IsolatedAsyncioTestCase):
         result = await remember("JWT auth preferred over sessions", source="test")
 
         mock_agent.ingest.assert_called_once_with(
-            "JWT auth preferred over sessions", source="test"
+            "JWT auth preferred over sessions", source="test", origin_platform="unknown"
         )
         self.assertEqual(result, "Stored as MemCube #1")
 

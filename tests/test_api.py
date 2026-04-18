@@ -53,7 +53,7 @@ class TestAPI(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         data = await resp.json()
         self.assertEqual(data["status"], "ingested")
-        self.agent.ingest.assert_called_once_with("some info", source="web")
+        self.agent.ingest.assert_called_once_with("some info", source="web", origin_platform="rest-api")
 
     @unittest_run_loop
     async def test_status_route(self):

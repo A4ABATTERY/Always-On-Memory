@@ -8,6 +8,7 @@ Each key is associated with exactly one named agent/LLM. The key is the
 Bearer token sent in the Authorization header. The name is used for logging.
 """
 
+import contextvars
 import os
 import logging
 from typing import Dict, Optional
@@ -17,6 +18,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 log = logging.getLogger("memory-agent.mcp-auth")
+
+# Stores the caller identity for the current MCP request.
+# Set by APIKeyMiddleware.dispatch() before the request handler runs.
+# Readable anywhere downstream in the same asyncio task via _caller_ctx.get().
+# Format: "mcp:{agent_name}" (e.g. "mcp:claude-code") or "unknown" if unset.
+_caller_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "aom_caller", default="unknown"
+)
 
 
 def load_api_keys() -> Dict[str, str]:
@@ -102,4 +111,5 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             )
 
         log.debug(f"mcp_auth: authenticated agent '{agent_name}' for {request.url.path}")
+        _caller_ctx.set(f"mcp:{agent_name}")
         return await call_next(request)

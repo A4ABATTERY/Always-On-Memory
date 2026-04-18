@@ -209,12 +209,12 @@ class MemoryAgent:
             try:
                 text = file_path.read_text(encoding="utf-8", errors="replace")[:10000]
                 if text.strip():
-                    return await self.ingest(text, source=file_path.name)
+                    return await self.ingest(text, source=file_path.name, origin_platform="inbox-watcher")
             except Exception as e:
                 log.error(f"Failed to read {file_path}: {e}")
         return f"Skipped: unsupported or empty file {file_path.name}"
 
-    async def ingest(self, text: str, source: str = "") -> str:
+    async def ingest(self, text: str, source: str = "", origin_platform: str = "inbox-watcher") -> str:
         record_activity()
         log.info(f"📥 Analyzing {'file: ' + source if source else 'text content'} ({len(text)} chars)...")
         msg = f"Remember this information (source: {source}):\n\n{text}" if source else f"Remember this information:\n\n{text}"
@@ -248,8 +248,18 @@ class MemoryAgent:
                 importance_score=0.5,
                 sector="episodic",
                 source=source or "ingest-fallback",
+                origin_platform=origin_platform,
             )
             return f"Stored via fallback as MemCube #{fallback['memory_id']}"
+
+        # Override origin_platform for all memories written by this ingest call.
+        # The LLM calls store_memory with its default "aom-local"; we correct it here.
+        with db_session() as db:
+            db.execute(
+                "UPDATE memories SET origin_platform = ? WHERE created_at >= ?",
+                (origin_platform, before_ts),
+            )
+            db.commit()
 
         return result.output
 
@@ -351,6 +361,7 @@ class MemoryAgent:
                     importance_score=base_importance,
                     sector="semantic",
                     source=base_source,
+                    origin_platform="consolidation",
                 )
                 insights_created += 1
 
@@ -423,6 +434,7 @@ class MemoryAgent:
                     importance_score=base_importance,
                     sector="semantic",
                     source=base_source,
+                    origin_platform="deep-reconsolidation",
                 )
                 insights_created += 1
 
@@ -595,6 +607,7 @@ async def _dream_reorganize(agent: MemoryAgent):
                         importance_score=base_importance,
                         sector="semantic",
                         source=base_source,
+                        origin_platform="autodream",
                     )
                     insights_created += 1
                     log.info(f"💤 Dream: created Insight Cube #{new_cube['memory_id']} from {cluster_name}")
@@ -668,11 +681,11 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                         log.info(f"📄 Processing text file: {rel_path} (update: {is_update})")
                         text = content_bytes.decode('utf-8', errors='replace')[:10000]
                         if text.strip():
-                            await agent.ingest(text, source=rel_path)
+                            await agent.ingest(text, source=rel_path, origin_platform="inbox-watcher")
                             success = True
                     elif suffix in MEDIA_EXTENSIONS:
                         log.info(f"🖼️  Processing media file: {rel_path} (update: {is_update})")
-                        await agent.ingest(f"New media file found: {f.name}", source=rel_path)
+                        await agent.ingest(f"New media file found: {f.name}", source=rel_path, origin_platform="inbox-watcher")
                         success = True
 
                     if success:

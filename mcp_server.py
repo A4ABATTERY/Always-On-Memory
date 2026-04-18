@@ -62,7 +62,9 @@ async def remember(text: str, source: str = "") -> str:
     Returns:
         Confirmation string with the assigned MemCube ID.
     """
-    return await _agent.ingest(text, source=source)
+    from mcp_auth import _caller_ctx
+    origin = _caller_ctx.get()  # "mcp:{agent_name}" or "unknown" (no-auth mode)
+    return await _agent.ingest(text, source=source, origin_platform=origin)
 
 
 @mcp.tool()
@@ -351,7 +353,8 @@ async def run_mcp_server(
         log_level="info",
         lifespan="on",     # REQUIRED: initialises StreamableHTTPSessionManager
         access_log=False,  # AOM uses its own logging
-        install_handlers=False,  # Let Agent.py handle signals
+        # install_handlers removed in uvicorn 0.44.0; signal handling managed via
+        # the _watch_shutdown task below that propagates agent shutdown to uvicorn.
     )
     server = uvicorn.Server(mcp_uvicorn_config)
 
