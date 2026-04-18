@@ -110,6 +110,14 @@ STEP 4 – ZERO-LOSS WITHIN TOPIC:
   entity name, version number, and architectural decision from the source memories assigned
   to that topic MUST be preserved in the insight text.
 
+STEP 5 – RAW TEXT GROUNDING (CRITICAL):
+  Each source memory now includes both `summary` and `raw_text` fields.
+  - The `raw_text` is the AUTHORITATIVE source. The `summary` is a compressed hint only.
+  - When `raw_text` is available, synthesize from `raw_text`, NOT from `summary`.
+  - If `raw_text` contains specific values (function names, line numbers, column names,
+    thresholds, enumerations), those MUST appear verbatim in the insight text.
+  - Do NOT paraphrase technical identifiers. Copy them exactly from `raw_text`.
+
 MANDATE: Output a `MultiSynthesisResult`. Do NOT call storage tools.
 """
 
@@ -122,6 +130,9 @@ Equation: score = (fidelity × 0.35) + (source_coverage × 0.35) + (topic_cohesi
 
 • FIDELITY (0.35): Did the synthesis accurately preserve source facts? Penalize hallucinations.
   (Subtract 0.2 per invented fact, 0.1 per distortion)
+  RAW TEXT CHECK: Source memories include `raw_text` fields. Check that named identifiers
+  (function names, constants, file paths, numeric thresholds) present in `raw_text` also
+  appear in the synthesis. Subtract 0.1 per named identifier dropped (cap at -0.3).
 
 • SOURCE_COVERAGE (0.35): Were ALL submitted source memory IDs used in at least one TopicSynthesis?
   Map source_ids across all generated insights against the submitted memory list.

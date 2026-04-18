@@ -253,6 +253,31 @@ class MemoryAgent:
 
         return result.output
 
+    def _load_project_context(self) -> str:
+        """Read up to 2000 chars of project context from inbox/*.md files.
+
+        Provides the Generator/Evaluator with lightweight project grounding so
+        they can relate memory clusters to known architecture without a search call.
+        Returns an empty string when no inbox markdown files exist (graceful degradation).
+        """
+        inbox = Path(INBOX_DIR)
+        if not inbox.is_dir():
+            return ""
+        fragments = []
+        total = 0
+        for md_file in sorted(inbox.glob("*.md")):
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="replace")
+                remaining = 2000 - total
+                if remaining <= 0:
+                    break
+                fragment = text[:remaining]
+                fragments.append(f"--- {md_file.name} ---\n{fragment}")
+                total += len(fragment)
+            except OSError:
+                continue
+        return "\n\n".join(fragments)
+
     async def adversarial_consolidation(
         self,
         generator: Agent[None, MultiSynthesisResult],
@@ -264,12 +289,15 @@ class MemoryAgent:
         """
         Generator-Evaluator adversarial loop using PydanticAI structured results.
         """
+        project_ctx = self._load_project_context()
+        ctx_header = f"Project context (for grounding only):\n{project_ctx}\n\n" if project_ctx else ""
+
         feedback = "No feedback yet. Generate the initial synthesis."
         for attempt in range(max_attempts):
             # Step 1: Generator creates multi-topic synthesis (Structured Result)
             gen_result = await retry_with_backoff(
                 generator.run,
-                f"Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
+                f"{ctx_header}Synthesize these memories. Previous feedback: {feedback}\n\nMemories:\n{raw_memories_text}",
                 shutdown_event=_shutdown_event,
             )
             draft_data: MultiSynthesisResult = gen_result.output
