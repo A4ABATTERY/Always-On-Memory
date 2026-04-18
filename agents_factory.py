@@ -34,6 +34,14 @@ INGEST_SYSTEM_PROMPT = """
 You are a Memory Ingest Agent. You handle ALL types of input — text, images, audio, video, and PDFs.
 Your goal is to transform raw multifaceted data into a standardized MemCube format for long-term storage.
 
+**SECTION CONTEXT**: You are processing ONE SECTION (chunk) of a potentially larger document.
+Treat this chunk as complete and self-contained — do NOT compress or omit any specific values,
+enumerations, line references, or named identifiers. Preserve them verbatim in raw_text.
+If this section contains distinct sub-topics, create MULTIPLE memories (one per sub-topic) rather
+than collapsing everything into a single MemCube.
+
+Being a bit more verbose is better than being too concise; it's worse to miss a detail than to be a bit verbose.
+
 ### ─── INGESTION PROTOCOL (Step-by-Step) ───
 
 1.  **Analyze Context**: Identify the primary medium (Text, Image, PDF, etc.) and the core intent (Command, Fact, Event, Logic).
@@ -44,6 +52,8 @@ Your goal is to transform raw multifaceted data into a standardized MemCube form
 3.  **Language-Agnostic Entity Extraction**:
     *   **Code**: Extract all structural components (Functions, Classes, Imports, Constants, Variables, Hooks). Do NOT be language-specific; look for architectural patterns.
     *   **Prose**: Extract People, Organizations, Products, Technical Concepts, Locations, and specific Dates.
+    *   **SQL**: Extract all structural components (Tables, Columns, Relationships, Constraints). Do NOT be language-specific; look for architectural patterns.
+    *   **General**: Extract any other entities that seem relevant.
 4.  **Semantic Sectoring (Pick ONE)**:
     *   `semantic`: Static facts, core architectural rules, permanent conventions, system constraints.
     *   `episodic`: Log entries, specific task outcomes, historical events (Who/What/When).
@@ -57,7 +67,9 @@ Your goal is to transform raw multifaceted data into a standardized MemCube form
 *   **Input**: "Added a new `AuthMiddleware` to `server.py` to handle JWT validation."
 *   **Action**: Call `store_memory(raw_text="...", summary="...", sector="semantic", entities=["AuthMiddleware", "server.py", "JWT"], topics=["Authentication", "Middleware"], importance_score=0.7)`
 
+
 **MANDATE**: Always end by calling the `store_memory` tool. Your response should confirm storage and state the Sector chosen.
+
 """
 
 GENERATOR_SYSTEM_PROMPT = """
@@ -78,7 +90,7 @@ You are a Memory Synthesis Generator. Your task is to take a cluster of raw, fra
 
 ### ─── MULTI-THEMATIC EXTRACTION PROTOCOL ───
 
-You are NOT summarizing. You are EXTRACTING distinct thematic knowledge units.
+You are NOT summarizing. You are EXTRACTING distinct thematic knowledge units. Being a bit more verbose is better than being too concise.
 
 STEP 1 – TOPIC IDENTIFICATION:
   Scan the full list of source memories and group them into 2–5 distinct thematic clusters.

@@ -202,14 +202,25 @@ class MemoryAgent:
     async def ingest_file(self, file_path: Path) -> str:
 # ... (rest of the file)
 
-        """Ingest a text-based file from the inbox."""
+        """Ingest a text-based file from the inbox, chunking large documents."""
         record_activity()
         suffix = file_path.suffix.lower()
         if suffix in TEXT_EXTENSIONS:
             try:
-                text = file_path.read_text(encoding="utf-8", errors="replace")[:10000]
+                text = file_path.read_text(encoding="utf-8", errors="replace")
                 if text.strip():
-                    return await self.ingest(text, source=file_path.name)
+                    from chunker import chunk_document
+                    chunks = chunk_document(text, file_path.name)
+                    results = []
+                    for chunk in chunks:
+                        src = (
+                            f"{file_path.name}#chunk-{chunk['chunk_index']}"
+                            if len(chunks) > 1
+                            else file_path.name
+                        )
+                        result = await self.ingest(chunk["text"], source=src)
+                        results.append(result)
+                    return f"Ingested {len(chunks)} chunk(s) from {file_path.name}"
             except Exception as e:
                 log.error(f"Failed to read {file_path}: {e}")
         return f"Skipped: unsupported or empty file {file_path.name}"
@@ -666,9 +677,18 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                     success = False
                     if suffix in TEXT_EXTENSIONS:
                         log.info(f"📄 Processing text file: {rel_path} (update: {is_update})")
-                        text = content_bytes.decode('utf-8', errors='replace')[:10000]
+                        text = content_bytes.decode('utf-8', errors='replace')
                         if text.strip():
-                            await agent.ingest(text, source=rel_path)
+                            from chunker import chunk_document
+                            chunks = chunk_document(text, rel_path)
+                            log.info(f"📄 Chunked {rel_path} into {len(chunks)} chunk(s)")
+                            for chunk in chunks:
+                                chunk_source = (
+                                    f"{rel_path}#chunk-{chunk['chunk_index']}"
+                                    if len(chunks) > 1
+                                    else rel_path
+                                )
+                                await agent.ingest(chunk["text"], source=chunk_source)
                             success = True
                     elif suffix in MEDIA_EXTENSIONS:
                         log.info(f"🖼️  Processing media file: {rel_path} (update: {is_update})")
