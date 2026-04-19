@@ -30,7 +30,11 @@ from utils import chunk_text
 # ─── Internal Helpers ─────────────────────────────────────────────────────────
 
 def _merge_small_chunks(chunks: List[dict], min_chars: int) -> List[dict]:
-    """Merge chunks below min_chars into the following chunk to avoid micro-MemCubes."""
+    """Merge chunks below min_chars into the following chunk to avoid micro-MemCubes.
+
+    Forward pass: tiny chunks merge into their successor.
+    Backward pass: a tiny final chunk (no successor) merges into its predecessor.
+    """
     if not chunks:
         return chunks
 
@@ -54,6 +58,11 @@ def _merge_small_chunks(chunks: List[dict], min_chars: int) -> List[dict]:
             continue
         merged.append(chunk)
         i += 1
+
+    # Backward pass: if the final chunk is still too small, merge it into its predecessor
+    if len(merged) >= 2 and len(merged[-1]["text"]) < min_chars:
+        tail = merged.pop()
+        merged[-1]["text"] = merged[-1]["text"].rstrip() + "\n\n" + tail["text"].lstrip()
 
     # Re-sequence indices after merging
     for idx, ch in enumerate(merged):
@@ -93,7 +102,7 @@ def _chunk_markdown(text: str) -> Optional[List[dict]]:
     Returns None if no qualifying headings are found (so the caller can
     fall through to the next strategy).
     """
-    pattern = re.compile(r'^(#{2,3} .+)$', re.MULTILINE)
+    pattern = re.compile(r'^(#{1,3} .+)$', re.MULTILINE)
     positions = [(m.start(), m.group(1)) for m in pattern.finditer(text)]
 
     if not positions:

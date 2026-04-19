@@ -101,10 +101,17 @@ class MemoryAgent:
         """Callback for Librarian to promote a WorkDir file to full semantic ingest.
 
         Triggered when a file contains a '# @memory' tag or exceeds PROMOTION_THRESHOLD
-        drift score. Delegates to self.ingest() which handles the reflexive-loop guard.
+        drift score. Chunks the document first to avoid the 10,000-char truncation
+        that previously silently discarded content from large promoted files.
         """
         log.info(f"📢 Promoting WorkDir file to semantic memory: {path}")
-        await self.ingest(text[:10000], source=path)
+        from chunker import chunk_document
+        chunks = chunk_document(text, path)
+        for chunk in chunks:
+            chunk_source = (
+                f"{path}#chunk-{chunk['chunk_index']}" if len(chunks) > 1 else path
+            )
+            await self.ingest(chunk["text"], source=chunk_source)
 
     async def _audit_link(self, path: str, memory_id: int):
         """Use the Sync Agent to audit a link after drift is detected."""
@@ -719,7 +726,10 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                             update_link_status(mid, rel_path, "active")
                             
                         with db_session() as db:
-                            new_mems = db.execute("SELECT id FROM memories WHERE source = ? AND created_at >= ?", (rel_path, before_ts)).fetchall()
+                            new_mems = db.execute(
+                                "SELECT id FROM memories WHERE (source = ? OR source LIKE ?) AND created_at >= ?",
+                                (rel_path, f"{rel_path}#chunk-%", before_ts)
+                            ).fetchall()
                             for nm in new_mems:
                                 db.execute("DELETE FROM memories WHERE id = ?", (nm["id"],))
                                 db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (nm["id"],))
