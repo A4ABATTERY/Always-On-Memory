@@ -139,6 +139,57 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
             "details": result,
         })
 
+    async def handle_audit(request: web.Request) -> web.Response:
+        """Return audit history for a MemCube or all events since a given date.
+
+        Query params (at least one required):
+          ?cube_id=<uuid>      — full history for one MemCube
+          ?since=<ISO-date>    — all events on or after the given timestamp/date
+        """
+        from database import db_session
+        import json as _json
+
+        cube_id = request.query.get("cube_id", "").strip()
+        since = request.query.get("since", "").strip()
+
+        if not cube_id and not since:
+            return web.json_response(
+                {"error": "provide ?cube_id=<id> or ?since=<ISO-date>"},
+                status=400,
+            )
+
+        with db_session() as db:
+            if cube_id and since:
+                rows = db.execute(
+                    "SELECT * FROM memory_audit_log WHERE cube_id = ? AND created_at >= ? ORDER BY created_at ASC",
+                    (cube_id, since),
+                ).fetchall()
+            elif cube_id:
+                rows = db.execute(
+                    "SELECT * FROM memory_audit_log WHERE cube_id = ? ORDER BY created_at ASC",
+                    (cube_id,),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM memory_audit_log WHERE created_at >= ? ORDER BY created_at ASC",
+                    (since,),
+                ).fetchall()
+
+        events = [
+            {
+                "id": r["id"],
+                "cube_id": r["cube_id"],
+                "event_type": r["event_type"],
+                "actor": r["actor"],
+                "before_text": r["before_text"],
+                "after_text": r["after_text"],
+                "metadata": _json.loads(r["metadata"] or "{}"),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+        return web.json_response({"events": events, "count": len(events)})
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -153,5 +204,6 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
     app.router.add_post("/import_cubes", handle_import_cubes)
     app.router.add_get("/links", handle_links)
     app.router.add_post("/verify", handle_verify)
+    app.router.add_get("/audit", handle_audit)
 
     return app
