@@ -5,9 +5,11 @@ Server Module — Defines the HTTP API using aiohttp.
 from aiohttp import web
 from typing import Any
 
+from pathlib import Path
+
 from memory_store import (
     read_all_memories, get_memory_stats, delete_memory,
-    get_all_links
+    get_all_links, read_consolidation_history
 )
 
 from librarian import search_documents, verify_watch_dirs
@@ -139,6 +141,46 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
             "details": result,
         })
 
+    async def handle_consolidations(request: web.Request) -> web.Response:
+        """Return recent consolidation history."""
+        limit = int(request.query.get("limit", "20"))
+        result = read_consolidation_history(limit=limit)
+        return web.json_response(result)
+
+    async def handle_stats(request: web.Request) -> web.Response:
+        """Extended stats: base stats + per-sector memory counts for the UI dashboard."""
+        from database import db_session
+        import json as _json
+        base = get_memory_stats()
+        with db_session() as db:
+            sector_rows = db.execute(
+                "SELECT sector, COUNT(*) as cnt FROM memories GROUP BY sector"
+            ).fetchall()
+            by_sector = {r["sector"]: r["cnt"] for r in sector_rows}
+            # Ingestion rate: memories created in last 7 days
+            from datetime import datetime, timezone, timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            recent = db.execute(
+                "SELECT COUNT(*) as c FROM memories WHERE created_at >= ?", (cutoff,)
+            ).fetchone()["c"]
+        base["by_sector"] = by_sector
+        base["ingested_last_7d"] = recent
+        return web.json_response(base)
+
+    async def handle_ui(request: web.Request) -> web.Response:
+        """Serve the single-page observability UI."""
+        ui_path = Path(__file__).parent / "ui" / "index.html"
+        if not ui_path.exists():
+            return web.Response(
+                text="<h1>UI not found</h1><p>ui/index.html missing.</p>",
+                content_type="text/html",
+                status=404,
+            )
+        return web.Response(
+            text=ui_path.read_text(encoding="utf-8"),
+            content_type="text/html",
+        )
+
     app.router.add_get("/query", handle_query)
     app.router.add_post("/ingest", handle_ingest)
     app.router.add_post("/consolidate", handle_consolidate)
@@ -153,5 +195,8 @@ def build_http(agent: Any, watch_path: str = INBOX_DIR) -> web.Application:
     app.router.add_post("/import_cubes", handle_import_cubes)
     app.router.add_get("/links", handle_links)
     app.router.add_post("/verify", handle_verify)
+    app.router.add_get("/consolidations", handle_consolidations)
+    app.router.add_get("/stats", handle_stats)
+    app.router.add_get("/ui", handle_ui)
 
     return app

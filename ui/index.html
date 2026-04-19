@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Always-On-Memory — Observability</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
+    --accent: #7c6af7; --accent2: #4ecdc4; --text: #e2e8f0;
+    --muted: #718096; --danger: #fc8181; --success: #68d391;
+    --warn: #f6ad55;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .badge { background: var(--accent); color: #fff; border-radius: 12px; padding: 2px 10px; font-size: 11px; }
+  nav { display: flex; gap: 2px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; }
+  nav button { background: none; border: none; color: var(--muted); padding: 10px 16px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; transition: color .15s; }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav button:hover { color: var(--text); }
+  .page { display: none; padding: 24px; max-width: 1400px; }
+  .page.active { display: block; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; }
+  .stat-card .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .section-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 12px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .bar-label { width: 110px; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+  .bar-count { font-size: 12px; color: var(--muted); width: 40px; text-align: right; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 13px; }
+  tr:hover td { background: var(--surface); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .pill.semantic  { background: #2d3748; color: var(--accent2); }
+  .pill.episodic  { background: #2d3748; color: var(--warn); }
+  .pill.procedural{ background: #2d3748; color: var(--success); }
+  .pill.reflection{ background: #2d3748; color: #f093fb; }
+  .score-bar { display: inline-block; width: 60px; height: 6px; background: var(--border); border-radius: 3px; vertical-align: middle; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 3px; }
+  .expand-row td { background: #13151f; padding: 16px; font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .search-bar input, .search-bar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none; }
+  .search-bar input { flex: 1; }
+  .search-bar input:focus { border-color: var(--accent); }
+  .btn { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn:hover { opacity: .9; }
+  .btn.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .pagination { display: flex; gap: 8px; align-items: center; margin-top: 16px; color: var(--muted); font-size: 13px; }
+  .pagination button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 4px 12px; border-radius: 4px; cursor: pointer; }
+  .pagination button:disabled { opacity: .4; cursor: default; }
+  .audit-entry { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; overflow: hidden; }
+  .audit-header { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: var(--surface); cursor: pointer; }
+  .audit-header .etype { font-weight: 600; font-size: 12px; }
+  .etype.created    { color: var(--success); }
+  .etype.repaired   { color: var(--warn); }
+  .etype.deleted    { color: var(--danger); }
+  .etype.consolidated { color: var(--accent2); }
+  .audit-body { padding: 12px 14px; font-size: 12px; color: var(--muted); display: none; }
+  .audit-body.open { display: block; }
+  .diff-line { font-family: monospace; white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
+  .diff-before { color: var(--danger); }
+  .diff-after  { color: var(--success); }
+  .audit-search { display: flex; gap: 8px; margin-bottom: 16px; }
+  .audit-search input { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none; flex: 1; }
+  .audit-search input:focus { border-color: var(--accent); }
+  .consolidation-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .consolidation-card .c-summary { font-weight: 500; margin-bottom: 6px; }
+  .consolidation-card .c-insight { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .consolidation-card .c-meta { font-size: 11px; color: var(--border); margin-top: 8px; }
+  .loading { color: var(--muted); padding: 40px; text-align: center; }
+  .error-msg { color: var(--danger); padding: 12px; background: #2d1515; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Always-On-Memory</h1>
+  <span class="badge" id="hdr-total">…</span>
+  <span style="margin-left:auto; color:var(--muted); font-size:12px;" id="hdr-ts"></span>
+</header>
+
+<nav>
+  <button class="active" onclick="showPage('stats')">Stats</button>
+  <button onclick="showPage('memories')">Memories</button>
+  <button onclick="showPage('consolidations')">Consolidations</button>
+  <button onclick="showPage('audit')">Audit Log</button>
+</nav>
+
+<!-- ─── Stats ─── -->
+<div id="page-stats" class="page active">
+  <div id="stats-cards" class="stats-grid"></div>
+  <div class="section-title">Memories by sector</div>
+  <div id="sector-bars"></div>
+</div>
+
+<!-- ─── Memory Browser ─── -->
+<div id="page-memories" class="page">
+  <div class="search-bar">
+    <input id="mem-search" type="text" placeholder="Filter by summary, source, sector…" oninput="filterMemories()">
+    <select id="mem-sector" onchange="filterMemories()">
+      <option value="">All sectors</option>
+      <option value="semantic">semantic</option>
+      <option value="episodic">episodic</option>
+      <option value="procedural">procedural</option>
+      <option value="reflection">reflection</option>
+    </select>
+    <button class="btn secondary" onclick="loadMemories()">Refresh</button>
+  </div>
+  <div id="mem-error"></div>
+  <table id="mem-table">
+    <thead><tr>
+      <th style="width:40px">#</th>
+      <th>Summary</th>
+      <th style="width:90px">Sector</th>
+      <th style="width:100px">Importance</th>
+      <th style="width:80px">Score</th>
+      <th style="width:130px">Created</th>
+    </tr></thead>
+    <tbody id="mem-body"></tbody>
+  </table>
+  <div class="pagination">
+    <button id="mem-prev" onclick="memPage(-1)" disabled>← Prev</button>
+    <span id="mem-page-info"></span>
+    <button id="mem-next" onclick="memPage(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ─── Consolidations ─── -->
+<div id="page-consolidations" class="page">
+  <div id="cons-loading" class="loading">Loading…</div>
+  <div id="cons-list"></div>
+</div>
+
+<!-- ─── Audit Log ─── -->
+<div id="page-audit" class="page">
+  <div class="audit-search">
+    <input id="audit-cube" type="text" placeholder="Filter by cube_id…" >
+    <input id="audit-since" type="date">
+    <button class="btn" onclick="loadAudit()">Search</button>
+    <button class="btn secondary" onclick="document.getElementById('audit-cube').value='';document.getElementById('audit-since').value='';loadAuditRecent()">Recent</button>
+  </div>
+  <div id="audit-error"></div>
+  <div id="audit-list"><div class="empty">Enter a cube_id or date and press Search.</div></div>
+</div>
+
+<script>
+// ─── Navigation ─────────────────────────────────────────────────────────────
+
+const pages = ['stats','memories','consolidations','audit'];
+function showPage(name) {
+  pages.forEach(p => {
+    document.getElementById('page-'+p).classList.toggle('active', p===name);
+  });
+  document.querySelectorAll('nav button').forEach((b,i) => {
+    b.classList.toggle('active', pages[i]===name);
+  });
+  if (name==='stats') loadStats();
+  if (name==='memories') loadMemories();
+  if (name==='consolidations') loadConsolidations();
+  if (name==='audit') { /* wait for user input */ }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function apiFetch(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+function scoreColor(s) {
+  if (s >= 0.8) return '#68d391';
+  if (s >= 0.5) return '#f6ad55';
+  return '#fc8181';
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return iso.replace('T',' ').slice(0,16);
+}
+
+// ─── Stats Page ──────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  try {
+    const d = await apiFetch('/stats');
+    document.getElementById('hdr-total').textContent = d.total_memories + ' memories';
+    document.getElementById('hdr-ts').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+
+    const cards = [
+      { label:'Total Memories',     value: d.total_memories,      sub: '' },
+      { label:'Unconsolidated',      value: d.unconsolidated,      sub: 'pending synthesis' },
+      { label:'Consolidations',      value: d.consolidations,      sub: 'runs completed' },
+      { label:'Indexed Documents',   value: d.indexed_documents,   sub: 'files in Librarian' },
+      { label:'Active Links',        value: d.structural_links?.active ?? 0, sub: 'code-memory' },
+      { label:'Ingested (7d)',        value: d.ingested_last_7d ?? '—', sub: 'last 7 days' },
+    ];
+    document.getElementById('stats-cards').innerHTML = cards.map(c => `
+      <div class="stat-card">
+        <div class="label">${c.label}</div>
+        <div class="value">${c.value}</div>
+        <div class="sub">${c.sub}</div>
+      </div>`).join('');
+
+    const by = d.by_sector || {};
+    const total = Object.values(by).reduce((a,b)=>a+b, 0) || 1;
+    const sectors = ['semantic','episodic','procedural','reflection'];
+    document.getElementById('sector-bars').innerHTML = sectors.map(s => {
+      const cnt = by[s] || 0;
+      const pct = Math.round(cnt/total*100);
+      return `<div class="bar-row">
+        <div class="bar-label">${s}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        <div class="bar-count">${cnt}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('stats-cards').innerHTML = `<div class="error-msg">Failed to load stats: ${e.message}</div>`;
+  }
+}
+
+// ─── Memory Browser ──────────────────────────────────────────────────────────
+
+let _allMemories = [];
+let _filteredMemories = [];
+let _memPage = 0;
+const MEM_PAGE_SIZE = 50;
+
+async function loadMemories() {
+  document.getElementById('mem-body').innerHTML = '<tr><td colspan="6" class="loading">Loading…</td></tr>';
+  try {
+    const d = await apiFetch('/memories');
+    _allMemories = d.memories || [];
+    filterMemories();
+  } catch(e) {
+    document.getElementById('mem-error').innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+function filterMemories() {
+  const q = document.getElementById('mem-search').value.toLowerCase();
+  const sector = document.getElementById('mem-sector').value;
+  _filteredMemories = _allMemories.filter(m => {
+    if (sector && m.sector !== sector) return false;
+    if (q && !((m.summary||'').toLowerCase().includes(q) ||
+               (m.source||'').toLowerCase().includes(q) ||
+               (m.sector||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  _memPage = 0;
+  renderMemories();
+}
+
+function renderMemories() {
+  const start = _memPage * MEM_PAGE_SIZE;
+  const slice = _filteredMemories.slice(start, start + MEM_PAGE_SIZE);
+  const total = _filteredMemories.length;
+
+  if (!slice.length) {
+    document.getElementById('mem-body').innerHTML = '<tr><td colspan="6" class="empty">No memories found.</td></tr>';
+    document.getElementById('mem-page-info').textContent = '';
+    return;
+  }
+
+  document.getElementById('mem-body').innerHTML = slice.map((m, i) => {
+    const rowId = 'mrow-' + m.id;
+    const detailId = 'mdetail-' + m.id;
+    const pct = Math.round((m.importance_score||0)*100);
+    const color = scoreColor(m.importance_score||0);
+    return `
+      <tr id="${rowId}" style="cursor:pointer" onclick="toggleMemDetail(${m.id})">
+        <td style="color:var(--muted)">${m.id}</td>
+        <td>${escHtml(m.summary||'')}</td>
+        <td><span class="pill ${m.sector||''}">${m.sector||''}</span></td>
+        <td>
+          <span class="score-bar"><span class="score-fill" style="width:${pct}%;background:${color}"></span></span>
+          <span style="margin-left:6px;font-size:12px;color:var(--muted)">${(m.importance_score||0).toFixed(2)}</span>
+        </td>
+        <td style="color:var(--muted)">${(m.composite_score||0).toFixed(3)}</td>
+        <td style="color:var(--muted);font-size:12px">${fmtDate(m.created_at)}</td>
+      </tr>
+      <tr id="${detailId}" style="display:none">
+        <td colspan="6" class="expand-row">
+          <div style="margin-bottom:6px;color:var(--text);font-weight:500">Source: ${escHtml(m.source||'—')}</div>
+          <div style="margin-bottom:6px"><span style="color:var(--muted)">Consolidated:</span> ${m.consolidated ? '✓' : '✗'}</div>
+          <div style="color:var(--muted);margin-top:8px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">cube_id</div>
+          <div style="font-family:monospace;font-size:11px;color:var(--accent2)">${escHtml(m.cube_id||'')}</div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  document.getElementById('mem-page-info').textContent =
+    `${start+1}–${Math.min(start+MEM_PAGE_SIZE, total)} of ${total}`;
+  document.getElementById('mem-prev').disabled = _memPage === 0;
+  document.getElementById('mem-next').disabled = start + MEM_PAGE_SIZE >= total;
+}
+
+function toggleMemDetail(id) {
+  const el = document.getElementById('mdetail-'+id);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function memPage(dir) {
+  _memPage += dir;
+  renderMemories();
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Consolidations ──────────────────────────────────────────────────────────
+
+async function loadConsolidations() {
+  document.getElementById('cons-loading').style.display = 'block';
+  document.getElementById('cons-list').innerHTML = '';
+  try {
+    const d = await apiFetch('/consolidations?limit=30');
+    document.getElementById('cons-loading').style.display = 'none';
+    if (!d.consolidations || !d.consolidations.length) {
+      document.getElementById('cons-list').innerHTML = '<div class="empty">No consolidations yet.</div>';
+      return;
+    }
+    document.getElementById('cons-list').innerHTML = d.consolidations.map((c,i) => `
+      <div class="consolidation-card">
+        <div class="c-summary">${escHtml(c.summary||'')}</div>
+        <div class="c-insight">${escHtml((c.insight||'').slice(0,600))}${(c.insight||'').length>600?'…':''}</div>
+        <div class="c-meta">Source IDs: ${escHtml(c.source_ids||'')}</div>
+      </div>`).join('');
+  } catch(e) {
+    document.getElementById('cons-loading').style.display = 'none';
+    document.getElementById('cons-list').innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+
+async function loadAudit() {
+  const cubeId = document.getElementById('audit-cube').value.trim();
+  const since  = document.getElementById('audit-since').value.trim();
+  if (!cubeId && !since) {
+    document.getElementById('audit-error').innerHTML = '<div class="error-msg">Enter a cube_id or pick a date.</div>';
+    return;
+  }
+  document.getElementById('audit-error').innerHTML = '';
+  let url = '/audit?';
+  if (cubeId) url += 'cube_id='+encodeURIComponent(cubeId)+'&';
+  if (since)  url += 'since='+encodeURIComponent(since);
+  await _fetchAndRenderAudit(url);
+}
+
+async function loadAuditRecent() {
+  document.getElementById('audit-error').innerHTML = '';
+  const since = new Date(Date.now()-7*86400e3).toISOString().slice(0,10);
+  await _fetchAndRenderAudit('/audit?since='+since);
+}
+
+async function _fetchAndRenderAudit(url) {
+  document.getElementById('audit-list').innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const d = await apiFetch(url);
+    if (!d.events || !d.events.length) {
+      document.getElementById('audit-list').innerHTML = '<div class="empty">No audit events found.</div>';
+      return;
+    }
+    document.getElementById('audit-list').innerHTML = [...d.events].reverse().map((e,i) => {
+      const detId = 'aud-body-'+i;
+      return `
+        <div class="audit-entry">
+          <div class="audit-header" onclick="document.getElementById('${detId}').classList.toggle('open')">
+            <span class="etype ${e.event_type}">${e.event_type.toUpperCase()}</span>
+            <span style="font-family:monospace;font-size:11px;color:var(--accent2)">${escHtml(e.cube_id||'').slice(0,8)}…</span>
+            <span style="color:var(--muted);font-size:12px">${escHtml(e.actor||'')}</span>
+            <span style="margin-left:auto;color:var(--muted);font-size:11px">${fmtDate(e.created_at)}</span>
+          </div>
+          <div id="${detId}" class="audit-body">
+            ${e.before_text ? `<div class="diff-line diff-before">− ${escHtml(e.before_text.slice(0,500))}</div>` : ''}
+            ${e.after_text  ? `<div class="diff-line diff-after" >+ ${escHtml(e.after_text.slice(0,500))}</div>` : ''}
+            <div style="margin-top:8px;font-size:11px;color:var(--border)">metadata: ${escHtml(JSON.stringify(e.metadata||{}))}</div>
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    const msg = e.message.includes('404') || e.message.includes('400')
+      ? 'Audit endpoint not available (requires Sprint 6 to be merged).'
+      : e.message;
+    document.getElementById('audit-list').innerHTML = `<div class="error-msg">${msg}</div>`;
+  }
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
+loadStats();
+</script>
+</body>
+</html>
