@@ -81,6 +81,20 @@ async def store_memory(
         db.commit()
     
     log.info(f"📥 Stored MemCube #{mid} [{cube.cube_id}]: {summary[:60]}...")
+
+    # Fire-and-forget audit event — errors are logged, never raised.
+    try:
+        from audit import write_audit_event
+        await write_audit_event(
+            cube_id=cube.cube_id,
+            event_type="created",
+            actor=origin_platform,
+            after_text=raw_text,
+            metadata={"memory_id": mid, "sector": sector, "source": source},
+        )
+    except Exception as _ae:
+        log.debug(f"audit write skipped: {_ae}")
+
     return {"memory_id": mid, "cube_id": cube.cube_id, "status": "stored"}
 
 def read_all_memories(limit: int = 200) -> Dict[str, Any]:
@@ -543,18 +557,44 @@ def repair_memory(memory_id: int, new_raw_text: str) -> Dict[str, Any]:
     Also resets the created_at timestamp to signify a refresh.
     """
     with db_session() as db:
-        row = db.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        row = db.execute(
+            "SELECT cube_id, raw_text, origin_platform FROM memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
         if not row:
             return {"status": "not_found", "memory_id": memory_id}
 
+        cube_id = row["cube_id"]
+        before_text = row["raw_text"]
+        actor = row["origin_platform"]
+
         now = datetime.now(timezone.utc).isoformat()
         db.execute(
-            "UPDATE memories SET raw_text = ?, created_at = ? WHERE id = ?", 
+            "UPDATE memories SET raw_text = ?, created_at = ? WHERE id = ?",
             (new_raw_text, now, memory_id)
         )
         db.commit()
         log.info(f"🛠️  Repaired memory #{memory_id} with updated insight.")
-        return {"status": "repaired", "memory_id": memory_id}
+
+    # Async audit event — use asyncio.get_event_loop().create_task() so this
+    # synchronous function can fire the event without blocking.
+    import asyncio as _asyncio
+    try:
+        from audit import write_audit_event
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(write_audit_event(
+                cube_id=cube_id,
+                event_type="repaired",
+                actor=actor,
+                before_text=before_text,
+                after_text=new_raw_text,
+                metadata={"memory_id": memory_id},
+            ))
+    except Exception as _ae:
+        log.debug(f"audit write skipped: {_ae}")
+
+    return {"status": "repaired", "memory_id": memory_id}
 
 def get_all_links() -> Dict[str, Any]:
     """Retrieve all file_links from memory connections."""

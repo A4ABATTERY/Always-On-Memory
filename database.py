@@ -122,6 +122,22 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols (file_path);
         """)
 
+        # Audit trail — immutable append-only log of all memory mutations.
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS memory_audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                cube_id     TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                actor       TEXT NOT NULL,
+                before_text TEXT,
+                after_text  TEXT,
+                metadata    TEXT,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_cube_id  ON memory_audit_log (cube_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_created  ON memory_audit_log (created_at);
+        """)
+
         # Promotion tracking — hash-gates WorkDir file promotion to the Ingest Agent.
         try:
             db.execute("ALTER TABLE documents ADD COLUMN promoted_hash TEXT DEFAULT NULL")

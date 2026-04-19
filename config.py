@@ -92,6 +92,13 @@ AOM_API_KEYS: str = os.getenv("AOM_API_KEYS", "")  # format: "name1:key1,name2:k
 # Set AOM_MCP_NO_AUTH=true ONLY for localhost-only deployments where auth is unnecessary.
 # If unset (default), starting the MCP server without AOM_API_KEYS raises RuntimeError.
 AOM_MCP_NO_AUTH: str = os.getenv("AOM_MCP_NO_AUTH", "")
+# Set AOM_REST_NO_AUTH=true for localhost-only dev. When true, REST API requires no token.
+# When false (default), Bearer token matching AOM_API_KEYS is required.
+REST_NO_AUTH: bool = os.getenv("AOM_REST_NO_AUTH", "false").lower() in ("1", "true", "yes")
+
+# Audit trail — JSONL files are written to AOM_AUDIT_LOG_DIR (one file per day).
+# Set to "" to disable JSONL file writing (DB audit log is always written).
+AOM_AUDIT_LOG_DIR: str = os.getenv("AOM_AUDIT_LOG_DIR", "./audit_logs")
 
 
 # Supported file types for multimodal ingestion (inbox watcher)
