@@ -85,6 +85,10 @@ DRIFT_THRESHOLD: float = float(os.getenv("DRIFT_THRESHOLD", "0.18"))
 # Set higher than DRIFT_THRESHOLD to avoid over-ingesting minor code edits.
 PROMOTION_THRESHOLD: float = float(os.getenv("PROMOTION_THRESHOLD", "0.35"))
 
+# Pre-ingestion chunking
+CHUNK_MAX_CHARS: int = int(os.getenv("CHUNK_MAX_CHARS", "3000"))
+CHUNK_MIN_CHARS: int = int(os.getenv("CHUNK_MIN_CHARS", "200"))
+
 # MCP Server
 MCP_PORT: int = int(os.getenv("MCP_PORT", "8765"))
 MCP_HOST: str = os.getenv("MCP_HOST", "0.0.0.0")

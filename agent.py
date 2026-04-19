@@ -101,10 +101,17 @@ class MemoryAgent:
         """Callback for Librarian to promote a WorkDir file to full semantic ingest.
 
         Triggered when a file contains a '# @memory' tag or exceeds PROMOTION_THRESHOLD
-        drift score. Delegates to self.ingest() which handles the reflexive-loop guard.
+        drift score. Chunks the document first to avoid the 10,000-char truncation
+        that previously silently discarded content from large promoted files.
         """
         log.info(f"📢 Promoting WorkDir file to semantic memory: {path}")
-        await self.ingest(text[:10000], source=path)
+        from chunker import chunk_document
+        chunks = chunk_document(text, path)
+        for chunk in chunks:
+            chunk_source = (
+                f"{path}#chunk-{chunk['chunk_index']}" if len(chunks) > 1 else path
+            )
+            await self.ingest(chunk["text"], source=chunk_source)
 
     async def _audit_link(self, path: str, memory_id: int):
         """Use the Sync Agent to audit a link after drift is detected."""
@@ -202,14 +209,25 @@ class MemoryAgent:
     async def ingest_file(self, file_path: Path) -> str:
 # ... (rest of the file)
 
-        """Ingest a text-based file from the inbox."""
+        """Ingest a text-based file from the inbox, chunking large documents."""
         record_activity()
         suffix = file_path.suffix.lower()
         if suffix in TEXT_EXTENSIONS:
             try:
-                text = file_path.read_text(encoding="utf-8", errors="replace")[:10000]
+                text = file_path.read_text(encoding="utf-8", errors="replace")
                 if text.strip():
-                    return await self.ingest(text, source=file_path.name)
+                    from chunker import chunk_document
+                    chunks = chunk_document(text, file_path.name)
+                    results = []
+                    for chunk in chunks:
+                        src = (
+                            f"{file_path.name}#chunk-{chunk['chunk_index']}"
+                            if len(chunks) > 1
+                            else file_path.name
+                        )
+                        result = await self.ingest(chunk["text"], source=src)
+                        results.append(result)
+                    return f"Ingested {len(chunks)} chunk(s) from {file_path.name}"
             except Exception as e:
                 log.error(f"Failed to read {file_path}: {e}")
         return f"Skipped: unsupported or empty file {file_path.name}"
@@ -666,9 +684,18 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                     success = False
                     if suffix in TEXT_EXTENSIONS:
                         log.info(f"📄 Processing text file: {rel_path} (update: {is_update})")
-                        text = content_bytes.decode('utf-8', errors='replace')[:10000]
+                        text = content_bytes.decode('utf-8', errors='replace')
                         if text.strip():
-                            await agent.ingest(text, source=rel_path)
+                            from chunker import chunk_document
+                            chunks = chunk_document(text, rel_path)
+                            log.info(f"📄 Chunked {rel_path} into {len(chunks)} chunk(s)")
+                            for chunk in chunks:
+                                chunk_source = (
+                                    f"{rel_path}#chunk-{chunk['chunk_index']}"
+                                    if len(chunks) > 1
+                                    else rel_path
+                                )
+                                await agent.ingest(chunk["text"], source=chunk_source)
                             success = True
                     elif suffix in MEDIA_EXTENSIONS:
                         log.info(f"🖼️  Processing media file: {rel_path} (update: {is_update})")
@@ -699,7 +726,10 @@ async def watch_folder(agent: MemoryAgent, folder: Path, poll_interval: int = 5)
                             update_link_status(mid, rel_path, "active")
                             
                         with db_session() as db:
-                            new_mems = db.execute("SELECT id FROM memories WHERE source = ? AND created_at >= ?", (rel_path, before_ts)).fetchall()
+                            new_mems = db.execute(
+                                "SELECT id FROM memories WHERE (source = ? OR source LIKE ?) AND created_at >= ?",
+                                (rel_path, f"{rel_path}#chunk-%", before_ts)
+                            ).fetchall()
                             for nm in new_mems:
                                 db.execute("DELETE FROM memories WHERE id = ?", (nm["id"],))
                                 db.execute("DELETE FROM vec_memories WHERE memory_id = ?", (nm["id"],))

@@ -100,5 +100,112 @@ class TestMemoryEdges(unittest.IsolatedAsyncioTestCase):
                 row = db.execute("SELECT 1 FROM processed_files WHERE path = ?", ("sub/folder/nested_test.txt",)).fetchone()
                 self.assertIsNotNone(row)
 
+class TestWatchFolderRollbackQuery(unittest.TestCase):
+    """
+    Regression guard for the LIKE-extended rollback query in watch_folder.
+
+    The bug: before the fix, the rollback only deleted memories whose source
+    exactly matched rel_path.  Chunk-sourced memories (source = "path#chunk-N")
+    were silently left behind.
+
+    The fix added:  OR source LIKE rel_path||'#chunk-%'
+
+    This test exercises that SQL directly against a real SQLite database so the
+    correctness of the query is verified without needing to drive the full
+    watch_folder coroutine.
+    """
+
+    DB_NAME = "test_rollback_query.db"
+
+    def setUp(self):
+        import os
+        if os.path.exists(self.DB_NAME):
+            os.remove(self.DB_NAME)
+        # Point the database module at our temp DB for this test class
+        self._env_patcher = unittest.mock.patch.dict(
+            os.environ, {"MEMORY_DB": self.DB_NAME}
+        )
+        self._env_patcher.start()
+        init_db()
+
+    def tearDown(self):
+        import os
+        self._env_patcher.stop()
+        if os.path.exists(self.DB_NAME):
+            os.remove(self.DB_NAME)
+
+    def _insert_memory(self, db, source: str, created_at: str) -> int:
+        """Insert a minimal memory row and return its id."""
+        import uuid
+        db.execute(
+            """INSERT INTO memories
+               (cube_id, sector, source, raw_text, summary, entities, topics,
+                connections, metadata, importance_score, created_at)
+               VALUES (?, 'semantic', ?, 'x', 'x', '[]', '[]', '[]', '{}', 0.5, ?)""",
+            (str(uuid.uuid4()), source, created_at),
+        )
+        return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def test_like_rollback_catches_chunk_rows(self):
+        """
+        The fixed query (exact OR LIKE) must return BOTH the bare-path memory
+        and the chunk-path memory.
+        """
+        from database import db_session
+
+        before_ts = "2024-01-01T00:00:00"
+        rel_path = "docs/file.md"
+
+        with db_session() as db:
+            id_bare = self._insert_memory(db, "docs/file.md", "2024-01-01T00:00:01")
+            id_chunk = self._insert_memory(db, "docs/file.md#chunk-1", "2024-01-01T00:00:01")
+            db.commit()
+
+            # --- Fixed query (should catch both rows) ---
+            rows_fixed = db.execute(
+                "SELECT id FROM memories WHERE (source = ? OR source LIKE ?) AND created_at >= ?",
+                (rel_path, f"{rel_path}#chunk-%", before_ts),
+            ).fetchall()
+            found_ids_fixed = {r["id"] for r in rows_fixed}
+
+            self.assertIn(id_bare, found_ids_fixed,
+                          "Fixed query must return the bare-path memory")
+            self.assertIn(id_chunk, found_ids_fixed,
+                          "Fixed query must return the chunk-path memory")
+            self.assertEqual(len(found_ids_fixed), 2,
+                             "Fixed query must return exactly 2 rows")
+
+    def test_exact_match_only_misses_chunk_rows(self):
+        """
+        The OLD (broken) query — exact source match only — must NOT return the
+        chunk-path memory.  This documents the pre-fix behaviour and ensures the
+        regression guard is meaningful.
+        """
+        from database import db_session
+
+        before_ts = "2024-01-01T00:00:00"
+        rel_path = "docs/file.md"
+
+        with db_session() as db:
+            id_bare = self._insert_memory(db, "docs/file.md", "2024-01-01T00:00:01")
+            id_chunk = self._insert_memory(db, "docs/file.md#chunk-1", "2024-01-01T00:00:01")
+            db.commit()
+
+            # --- Old (broken) query — exact match only ---
+            rows_old = db.execute(
+                "SELECT id FROM memories WHERE source = ? AND created_at >= ?",
+                (rel_path, before_ts),
+            ).fetchall()
+            found_ids_old = {r["id"] for r in rows_old}
+
+            self.assertIn(id_bare, found_ids_old,
+                          "Old query must still return the bare-path memory")
+            self.assertNotIn(id_chunk, found_ids_old,
+                             "Old query must NOT return the chunk-path memory — "
+                             "this proves the bug that the LIKE fix addressed")
+            self.assertEqual(len(found_ids_old), 1,
+                             "Old query must return exactly 1 row")
+
+
 if __name__ == "__main__":
     unittest.main()
