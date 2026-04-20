@@ -32,7 +32,7 @@ class TestProactiveSync(unittest.IsolatedAsyncioTestCase):
         self.embed_patcher = patch("utils.embed_text", AsyncMock(return_value=_DUMMY_VECTOR))
         self.embed_patcher.start()
 
-        self.mock_agents = [MagicMock() for _ in range(8)]
+        self.mock_agents = [MagicMock() for _ in range(9)]
         for m in self.mock_agents:
             m.run = AsyncMock()
 

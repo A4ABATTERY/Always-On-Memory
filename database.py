@@ -105,6 +105,12 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Additive migrations for memories
+        try:
+            db.execute("ALTER TABLE memories ADD COLUMN distillation_model TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Lexical Symbol Index — dedicated table for named code identifiers.
         # Separate from `documents` so symbol lookups are O(log n) via real indexes,
         # not O(n) full-table scans through a JSON column.

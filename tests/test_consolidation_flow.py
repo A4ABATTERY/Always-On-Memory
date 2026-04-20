@@ -31,7 +31,7 @@ class TestConsolidationFlow(unittest.IsolatedAsyncioTestCase):
 
         init_db()
 
-        self.mock_agents = [MagicMock() for _ in range(8)]
+        self.mock_agents = [MagicMock() for _ in range(9)]
         for m in self.mock_agents:
             m.run = AsyncMock()
 

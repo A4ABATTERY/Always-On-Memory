@@ -12,7 +12,7 @@ class TestAutoDream(unittest.IsolatedAsyncioTestCase):
     
     def setUp(self):
         # Patch build_agents to return mocks
-        self.mock_agents = [MagicMock() for _ in range(8)]
+        self.mock_agents = [MagicMock() for _ in range(9)]
         for m in self.mock_agents:
             m.run = AsyncMock()
             
